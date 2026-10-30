@@ -65,5 +65,35 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Check .bat encoding (see docs/lessons.md #7)
-        run: python -m pytest tests/test_app_contract.py -q
+      # 只用标准库：这个 job 不装 pytest/numpy，专门守住 .bat 的编码契约
+      # （cmd.exe 遇到 LF-only + UTF-8 中文的 .bat 会把 if(...) 块解析乱，见 docs/lessons.md #7）。
+      # 同样的断言也在 tests/test_app_contract.py 里，这里是更早、更便宜的独立信号。
+      - name: Check .bat encoding
+        shell: python
+        run: |
+          import pathlib
+          import sys
+
+          problems = []
+          files = sorted(pathlib.Path(".").glob("*.bat")) + sorted(pathlib.Path("asr_gui").glob("*.bat"))
+          if not files:
+              problems.append("no .bat files found")
+          for path in files:
+              data = path.read_bytes()
+              if data.startswith(b"\xef\xbb\xbf"):
+                  problems.append(f"{path}: has a UTF-8 BOM")
+              if b"\r\n" not in data:
+                  problems.append(f"{path}: no CRLF line endings")
+              if data.replace(b"\r\n", b"").count(b"\n"):
+                  problems.append(f"{path}: contains lone LF")
+              if data.replace(b"\r\n", b"").count(b"\r"):
+                  problems.append(f"{path}: contains lone CR")
+              non_ascii = [b for b in data if b > 0x7F]
+              if non_ascii:
+                  problems.append(f"{path}: {len(non_ascii)} non-ASCII bytes")
+
+          for path in files:
+              print(f"{path}: {len(path.read_bytes())} bytes, ascii+crlf ok")
+          if problems:
+              print("\n".join(problems))
+              sys.exit(1)
