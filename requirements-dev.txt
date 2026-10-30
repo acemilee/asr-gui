@@ -1,0 +1,13 @@
+# Development / CI dependencies.
+#
+# Runtime dependencies live in requirements.txt; this file only adds the tools
+# used for linting and testing. Install with:
+#   python -m pip install -r requirements-dev.txt
+#
+# The test suite deliberately needs nothing beyond numpy + av: the ASR engines
+# (sherpa-onnx, faster-whisper) are imported lazily inside the engine, so no
+# multi-hundred-MB model runtime is required to run `pytest`.
+-r requirements.txt
+
+pytest>=8,<9
+ruff>=0.6

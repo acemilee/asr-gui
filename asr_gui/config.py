@@ -1,0 +1,130 @@
+"""User configuration: no absolute paths baked into the source.
+
+Everything machine-specific (model cache, output folder, last used media,
+preferred engine) is stored in ``%APPDATA%\\asr-gui\\config.json`` on Windows
+and ``~/.asr-gui/config.json`` elsewhere.  The file is created on first save
+and is safe to delete: missing keys fall back to defaults.
+
+A deliberately small module - it exists so the GUI can be shipped publicly
+without any hard-coded ``E:\\...`` paths.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+CONFIG_DIR_ENV = "ASR_GUI_CONFIG_DIR"
+CONFIG_FILENAME = "config.json"
+
+DEFAULT_MODEL_ID = "paraformer-zh"
+DEFAULT_DEVICE = "cpu"
+DEFAULT_THREADS = 8
+DEFAULT_ENDPOINT = "mirror"
+
+
+def config_dir() -> Path:
+    env = os.environ.get(CONFIG_DIR_ENV, "").strip()
+    if env:
+        return Path(env).expanduser()
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        return Path(appdata) / "asr-gui"
+    return Path.home() / ".asr-gui"
+
+
+def config_path() -> Path:
+    return config_dir() / CONFIG_FILENAME
+
+
+def repo_root() -> Path:
+    """Directory that contains this ``asr_gui`` folder."""
+    return Path(__file__).resolve().parent.parent
+
+
+def default_output_dir() -> Path:
+    return repo_root() / "out"
+
+
+# Candidate locations that already hold a model cache, in priority order.
+def _cache_candidates() -> list[Path]:
+    root = repo_root()
+    return [
+        root / "models",
+        root / "_model_cache",
+        Path.cwd() / "models",
+    ]
+
+
+def discover_cache_dir() -> Path:
+    """Pick the first existing folder that already looks like a model cache.
+
+    Falls back to the per-user location (which may not exist yet - that is
+    fine, the GUI creates it before downloading).
+    """
+    from models_registry import default_cache_root, list_choices
+
+    env = os.environ.get("ASR_GUI_MODEL_DIR", "").strip()
+    if env:
+        return Path(env).expanduser()
+    for candidate in _cache_candidates():
+        if not candidate.is_dir():
+            continue
+        try:
+            if any(choice.cached for choice in list_choices(candidate)):
+                return candidate
+        except OSError:
+            continue
+    return default_cache_root()
+
+
+def defaults() -> dict:
+    return {
+        "model_id": DEFAULT_MODEL_ID,
+        "device": DEFAULT_DEVICE,
+        "num_threads": DEFAULT_THREADS,
+        "endpoint": DEFAULT_ENDPOINT,
+        "model_cache_dir": str(discover_cache_dir()),
+        "output_dir": str(default_output_dir()),
+        "last_media": "",
+        "output_name": "transcript",
+        # model_id -> explicit directory chosen via "import / locate"
+        "manual_models": {},
+    }
+
+
+def load() -> dict:
+    data = defaults()
+    path = config_path()
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return data
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                if key in data:
+                    data[key] = value
+            manual = data.get("manual_models")
+            if not isinstance(manual, dict):
+                data["manual_models"] = {}
+    return data
+
+
+def save(config: dict) -> tuple[bool, str]:
+    path = config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
+def clear_manual_entry(config: dict, model_id: str) -> None:
+    manual = config.get("manual_models")
+    if isinstance(manual, dict):
+        manual.pop(model_id, None)

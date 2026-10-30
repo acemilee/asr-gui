@@ -1,0 +1,90 @@
+# 踩坑与根因记录（lessons）
+
+> 详细根因/证据放这里，HANDOFF.md 只留指针（AGENTS 9.4）。
+
+## 1. VideoToNo 打包版长视频卡死 = 64 KiB 管道死锁（2026-10-30 确证）
+
+**现象**：短视频正常，9 小时以上长视频进度恒钉 38%，`_app.log` 不再增长，GPU 仍 75% 占用，任务既不失败也不完成。
+
+**根因链**（上游 `github.com/like-attract/video-to-note`，main sha `868dcc3`）：
+
+- `backend/asr_process.py:33-36` `use_child_process()` **只在 frozen(exe) 时为真** → 源码模式不走这条路径，所以只在打包版复现。
+- `backend/asr_process.py:94-100` 建管道时**未设 `limit=`** → asyncio `StreamReader` 默认单行上限 64 KiB。
+- `backend/asr_process.py:301` 工人把**整段转录塞进一行 JSON**（`:217-221` json.dumps 不换行）。
+- `backend/asr_process.py:108-115` `pump()` **无 try/except** → 读行抛 `LimitOverrunError` / `ValueError: Separator is not found, and chunk exceed the limit` 后静默死掉，哨兵永不送达。
+- `backend/asr_process.py:127` 父进程 `await events.get()` **无超时** → 永久阻塞；`:185-196` 非取消路径 `await process.wait()` 同样无超时，全流程无 watchdog。
+
+**本机复现证据**（python 3.13）：
+
+- `proc.stdout.readline()` 在单行 > 64 KiB 时抛 `ValueError: Separator is not found, and chunk exceed the limit`；
+- 60,000 B 通过 / 70,000 B 永久阻塞；`limit=16*1024*1024` 时 400 KB、900 KB 正常；
+- 体积对照：17 分钟 `transcript.json` = 22,105 B（paraformer）/ 64,536 B（whisper base，**已贴 64 KiB 线**）；10 小时 ×35.3 倍 → **780 KB ~ 2.28 MB**，必炸。
+- 上游 issue #6 用 23 分钟即可复现，**当前 main 未修**。
+
+**若要修 App 本体**：管道加 `limit=16*1024*1024`；`pump()` 加 try/except/finally 保证哨兵；父循环加超时。
+
+**次要根因**：整段 `decode_audio` 无分片（`whisper_asr.py:232`、`paraformer_asr.py:219`，10 h ≈ 2.07 GB float32）；paraformer 引擎全程无进度行；LLM 笔记阶段 6500 字切块 + 单请求 300 s 超时 + **无任务级超时**；yt-dlp 无 socket_timeout/retries。
+
+**已排除**：项目无任何云端 Whisper API（"25 MB 限制"不适用）；音频提取是 PyAV 不是 ffmpeg CLI。
+
+## 2. numpy 逐帧 concatenate = O(n²)，解码慢 150 倍（自己写的引擎踩的）
+
+第一版 `engine.py::_iter_chunks` 每来一帧就 `buf = np.concatenate([buf, samples])`。
+300 秒一块 = 480 万采样点，帧数 ~4700 → 累计拷贝 ~45 GB → **解码 RTF 0.217（300 s 音频要 65 s）**，实测 10 小时要多花 40 分钟。
+
+**改法**：预分配 `np.empty(chunk_samples, float32)`，逐帧写入，满一块就 yield 并换新缓冲。
+改完 **解码 RTF 0.0014**（900 s 音频 1.3 s），快了 **150 倍**。
+
+> 教训：分块流式处理里，"把数据攒起来"要用预分配缓冲，不要用 concatenate。
+
+## 3. PyAV `container.seek(offset, stream=...)` 的 offset 单位是**流的 time_base**
+
+用 `container.seek(int(sec * 1_000_000), stream=stream)`（AV_TIME_BASE 的值当流时间基用）→ **直接 seek 到文件末尾**（本例 chunk_start 变成 35990 而不是 600）。
+
+**正确写法**：
+
+```python
+tb = stream.time_base
+offset = int(start_sec / float(tb)) if tb else int(start_sec * 1_000_000)
+container.seek(offset, stream=stream, backward=True)
+```
+
+不给 `stream=` 时才用 AV_TIME_BASE（微秒）。两种写法在本文件上都能定位，但前者更快（0.4 s 到 18000 s 处）。
+
+## 4. 自研 ASR 的模型路径与上游 App 的一致性
+
+上游 App 把模型缓存在 `<workspace>/_model_cache/sherpa/{asr,punc,vad}`，界面下拉里的 "paraformer-zn（已缓存）" 指的就是这批文件；**exe 里的 sherpa_onnx 只存在于 PyInstaller 解包目录**（`%TEMP%\_MEIxxxx`，内嵌 Python 3.11），所以 venv 里必须自己 `pip install sherpa-onnx==1.13.8`（有 cp313 wheel）才能在 Python 侧直接调 paraformer。
+
+paraformer-zh 的 ONNX 含 `fsmn_block`（流式结构）→ **只能 CPU**。
+
+## 5. 官方 B站缓存 vs yt-dlp 下载产物
+
+- **yt-dlp 产物**（`audio_p1.m4a`）：干净 MP4，PyAV 直读。
+- **B站桌面客户端缓存**（`%USERPROFILE%\Videos\bilibili\<uid>\*.m4s`）：**不是强加密，是头部 9 字节扰动**（文件头 9 个 ASCII `000000000`，真实 ftyp 在偏移 9）。ffprobe/PyAV 直读报 `Invalid data found when processing input`；剥 9 字节后 ftyp(32)→moov(805)→sidx(86152)→moof/mdat 完全正常。
+- 结论：官方缓存能还原，但没必要碰它，workspace 里的 m4a 已等价可用。
+
+## 6. 短切片基准会高估长片吞吐：持续满载后降频 3–4 倍（2026-10-30 实测）
+
+冷机时用 120 s 切片测 paraformer-zn（threads=16）得 RTF **0.026**（3.1–3.5 s/120 s），按此外推 10 小时只要 ~15 分钟。
+但**真实跑完整 10 小时（119 块 × 300 s）用了 64.8 分钟**，整片 RTF **0.108**（32.4 s/块），比外推慢 4 倍。
+
+**验证**：转写结束、机器空闲（LoadPercentage 3%）后，用**同一段 120 s 音频**再测 3 次 → 9.57 / 12.50 / 12.43 s（RTF 0.080 / 0.104 / 0.104），与整片均值 0.108 吻合。
+→ 结论：**变慢来自持续满载后的整机降频/功耗限制**（i9-13980HX 笔记本），不是代码问题，也不是那段切片内容特殊。
+
+> 教训：单次短任务基准不能代表长时吞吐。估算长任务时间要用"冷机短测"与"长片实测"两个值，并以长片实测为准（本次 10 h = 60–70 分钟）。
+
+## 7. Windows .bat 必须纯 ASCII + CRLF：LF-only 会让 cmd 解析崩掉（2026-10-30 踩）
+
+用户双击 `asr_gui\启动转写GUI.bat` 报出一串无意义错误（`'鑵?GUI' 不是内部或外部命令`、`'~dp0"'`、`'" ('`、`系统找不到指定的路径。`）。
+
+**字节级自证**：文件 366 B、首 10 字节 `40 65 63 68 6f 20 6f 66 66 0a`（`@echo off` + **纯 LF**，无 BOM），`CR=0 / LF=13`，且正文含 UTF-8 中文。
+
+**根因**：①cmd.exe 按 OEM 代码页（GBK）读 .bat，UTF-8 中文变乱码；②**LF-only 换行会打乱 `if (...)` 复合块的解析**，块内 `%~dp0`、`(` 等碎片被当作独立命令执行——这就是 `'~dp0"'`、`'" ('` 的来源。
+
+**规则**：仓库里所有 `.bat` 一律 纯 ASCII + CRLF（`CR == LF`、`nonAscii == 0`），中文只出现在 `.md`/`.py` 里；`-c "..."` 内联 Python 串**不能出现 `%`**（cmd 会当变量展开吞掉，曾导致 `SyntaxError: unterminated string literal`）。
+
+## 8. tkinter 布局被 `ScrolledText` 默认 width 撑爆 + 截图要 DPI-aware（2026-10-30 踩）
+
+**布局**：`ScrolledText` 默认 `width=80`（字符），放进 `PanedWindow` 后把 `winfo_reqwidth` 顶到 **1211 px**，而窗口只有 1120 宽 → 右侧控件被裁。改为 `width=30/40` 后 req 降到 **858**。诊断方法是打印每个 `Labelframe` 的 `winfo_reqwidth()` 逐个排查，而不是凭肉眼猜。
+
+**截图**：显示器缩放 150% 时，DPI-unaware 的 Python 进程里 Tk 的 `winfo_width()`（1120 逻辑）与物理像素（1680）不一致，`ImageGrab(bbox=winfo_*)` 只能截到窗口左上 2/3，看起来像"窗口被裁了"，其实布局没问题。正确姿势：脚本**第一行** `ctypes.windll.user32.SetProcessDPIAware()`，再用 `GetWindowRect(int(root.wm_frame(), 16))` 作为 bbox。窗口被别的程序挡在前台时，`SetForegroundWindow` 常失败，用 Tk 自己的 `root.attributes("-topmost", True)` 才可靠；若连屏幕抓取都不行，`PrintWindow(hwnd, hdc, 2)` 可在窗口被遮挡时照样渲染。

@@ -1,0 +1,28 @@
+# Runtime dependencies for asr-gui (Python >= 3.9).
+#
+#   python -m pip install -r requirements.txt
+#
+# Pin the transcription backend exactly: sherpa-onnx 1.13.8 is the version the
+# paraformer-zh model files were validated against, and it ships wheels for
+# current CPython releases.
+sherpa-onnx==1.13.8
+
+# faster-whisper (CT2 backend) and its audio decoding stack.
+# av provides PyAV, used for streaming chunked decode of long videos.
+faster-whisper>=1.2,<2
+av>=13,<20
+numpy>=1.24
+
+# ---------------------------------------------------------------------------
+# GPU support (optional, NVIDIA only)
+#
+# faster-whisper runs on CUDA through CTranslate2, which needs the CUDA 12
+# cuBLAS and cuDNN runtime libraries. Two ways to provide them:
+#
+#   1. pip wheels (no system CUDA toolkit required):
+#          python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+#   2. an existing CUDA 12 / cuDNN installation on PATH.
+#
+# The paraformer-zh engine always runs on CPU (its ONNX graph contains
+# streaming blocks that sherpa-onnx cannot execute on the CUDA provider).
+# ---------------------------------------------------------------------------

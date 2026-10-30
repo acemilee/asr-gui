@@ -1,0 +1,17 @@
+# Normalize line endings so the repo behaves the same on every OS.
+* text=auto eol=lf
+
+# Windows batch files are executed by cmd.exe, which needs CRLF -> see docs/lessons.md #7.
+# They are stored with LF in the index and checked out as CRLF.
+*.bat text eol=crlf
+
+# Shell scripts must keep LF or bash refuses to run them.
+*.sh text eol=lf
+
+# Binary assets: never touch them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.onnx binary
+*.bin binary

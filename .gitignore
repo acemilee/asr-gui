@@ -1,0 +1,80 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Project output -------------------------------------------------------
+# Transcripts are user data, never commit them.
+out/
+*.jsonl
+*.txt
+*.srt
+*.vtt
+# ...but keep documentation and dependency manifests that happen to be .txt
+!requirements.txt
+!requirements*.txt
+!LICENSE.txt
+logs/
+*.log
+*.part
+*.tmp
+*.wav
+*.m4a
+*.mp3
+
+# --- Model weights / caches (hundreds of MB to several GB) ----------------
+models/
+_model_cache/
+*.onnx
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.h5
+snapshots/
+
+# --- Machine-local configuration -----------------------------------------
+asr_gui/config.local.bat
+config.local.*
+.local/
+
+# --- Editor / OS ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Misc local scratch ---------------------------------------------------
+*.bak
+*.orig
+_scratch/
+
+# --- Local working data (this checkout only) ------------------------------
+# The upstream portable app plus the 10 h test media live here; they are
+# several GB and never belong in git.
+workspace/
+VideoToNo-1.4.6-portable/
+
+# --- Local-only project notes --------------------------------------------
+# HANDOFF.md is a live work log full of machine-specific paths; AGENTS.md holds
+# personal working rules. Both stay untracked on purpose.
+HANDOFF.md
+AGENTS.md

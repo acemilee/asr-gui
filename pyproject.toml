@@ -1,0 +1,93 @@
+# Project metadata and tooling configuration only.
+#
+# The app runs from a source checkout (setup.bat / setup.sh + requirements.txt).
+# There is intentionally no [build-system] table and no entry point yet, so
+# `pip install .` is not a supported install path until the packaging layout
+# is decided -- see the NOTE further down.
+[project]
+name = "asr-gui"
+version = "0.1.0"
+description = "Offline long-video speech-to-text GUI: tkinter front end on top of sherpa-onnx (paraformer-zh) and faster-whisper."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = [
+    "asr",
+    "speech-to-text",
+    "transcription",
+    "sherpa-onnx",
+    "faster-whisper",
+    "tkinter",
+    "offline",
+    "chinese",
+]
+authors = [{ name = "asr-gui contributors" }]
+dependencies = [
+    "sherpa-onnx==1.13.8",
+    "faster-whisper>=1.2,<2",
+    "av>=13,<20",
+    "numpy>=1.24",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Multimedia :: Video",
+]
+
+# Optional extras only. Kept separate from the runtime dependencies so that a
+# CPU-only install stays small.
+[project.optional-dependencies]
+# CUDA 12 runtime libraries for the faster-whisper / CTranslate2 GPU path.
+gpu = [
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12",
+]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+# NOTE: no [project.scripts] / [project.gui-scripts] entry point yet.
+# asr_gui/ is not importable as a package (no __init__.py, and none is wanted
+# while app.py is meant to be launched as a plain script), so a console entry
+# pointing at "asr_gui.app:main" would ship a broken command. Adding the
+# entry point is deferred until the packaging/layout decision is made.
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = [
+    "out",
+    "workspace",
+    "VideoToNo-1.4.6-portable",
+    ".venv",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "UP045", # X | None is only safe because every module has `from __future__ import annotations`
+    "UP037", # quoted annotations are kept where a class refers to itself
+]
+
+[tool.ruff.lint.per-file-ignores]
+# app.py inserts its own directory into sys.path before importing the sibling
+# modules, so the tkinter/engine imports deliberately follow that statement.
+"asr_gui/app.py" = ["E402", "I001"]
