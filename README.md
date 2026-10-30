@@ -5,10 +5,9 @@ desktop app on top of [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no cloud APIs, no uploads, no
 Electron/Qt runtime, just Python 3.9+ and the standard library.
 
-<!-- Badges: add once CI / releases / PyPI exist.
+[![CI](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
--->
 
 ![GUI](asr_gui/GUI界面.png)
 

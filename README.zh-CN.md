@@ -4,10 +4,9 @@
 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 和 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)：
 不调云接口、不上传文件、不依赖 Qt/Electron，只要有 Python 3.9+ 和标准库就能跑。
 
-<!-- 徽章位：等 CI / Release / PyPI 就绪后启用
+[![CI](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
--->
 
 ![GUI](asr_gui/GUI界面.png)
 
