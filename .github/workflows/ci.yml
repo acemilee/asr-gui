@@ -74,6 +74,10 @@ jobs:
           import pathlib
           import sys
 
+          # 文件名里有中文（asr_gui/启动转写GUI.bat），而 Windows runner 的 stdout
+          # 默认是 cp1252，直接 print 会 UnicodeEncodeError -> 用 ascii 转义输出。
+          sys.stdout.reconfigure(encoding="ascii", errors="backslashreplace")
+
           problems = []
           files = sorted(pathlib.Path(".").glob("*.bat")) + sorted(pathlib.Path("asr_gui").glob("*.bat"))
           if not files:
