@@ -84,9 +84,27 @@ class TestNoHardcodedMachinePaths:
 
     def test_bat_files_are_ascii_crlf(self) -> None:
         """回归：.bat 必须是纯 ASCII + CRLF，否则 cmd 解析会崩（见 lessons 第 7 节）。"""
-        for bat in sorted(APP_PATH.parent.glob("*.bat")):
+        repo = APP_PATH.parent.parent
+        bats = sorted(repo.glob("*.bat")) + sorted(APP_PATH.parent.glob("*.bat"))
+        bats += sorted((repo / "packaging").glob("*.bat"))
+        assert bats, "没有找到任何 .bat 文件"
+        for bat in bats:
             raw = bat.read_bytes()
             assert b"\r\n" in raw, f"{bat.name} 不是 CRLF 换行"
             assert raw.count(b"\r") == raw.count(b"\n"), f"{bat.name} 混用换行符"
             non_ascii = [b for b in raw if b > 0x7F]
             assert non_ascii == [], f"{bat.name} 含非 ASCII 字节"
+
+    def test_all_python_sources_avoid_machine_paths(self) -> None:
+        """同一个约束也要覆盖 packaging/ 等新加的脚本目录。"""
+        repo = APP_PATH.parent.parent
+        offenders = []
+        for folder in (APP_PATH.parent, repo / "packaging", repo / "tests"):
+            if not folder.is_dir():
+                continue
+            for path in sorted(folder.glob("*.py")):
+                text = path.read_text(encoding="utf-8")
+                for marker in ("E:\\\\AI_dev", "C:\\\\Users\\\\", "F:\\\\python"):
+                    if marker in text:
+                        offenders.append(f"{path.name}: {marker}")
+        assert offenders == []

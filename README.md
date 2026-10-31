@@ -50,7 +50,25 @@ disk after every chunk, and the whole run can be cancelled and resumed at any ti
 Requirements: **Python 3.9+**, a CPU that can run ONNX/CTranslate2 (any x86-64 or Apple Silicon
 laptop is fine), and optionally an NVIDIA GPU with CUDA 12 for the faster-whisper path.
 
-### Windows
+### Windows without Python: grab the exe
+
+Download `ASR-GUI-v0.1.0-win64.exe` (~109 MB) from the
+[Releases](https://github.com/acemilee/asr-gui/releases) page and double-click it. Models are not
+bundled: pick one in the dropdown and press **Download model**, or point **Locate / import…** at an
+existing cache directory. Verify the download with:
+
+```bat
+certutil -hashfile ASR-GUI-v0.1.0-win64.exe SHA256
+```
+
+The exe also accepts two command-line entry points (handy for troubleshooting and batch jobs):
+
+```bat
+ASR-GUI.exe --selftest "%TEMP%\asr-gui-selftest.txt"                     :: environment check
+ASR-GUI.exe --transcribe sample.m4a --out out.txt --model paraformer-zh   :: headless run
+```
+
+### Windows from source
 
 ```bat
 setup.bat

@@ -104,7 +104,7 @@ class AsrGui:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("本地 ASR 长视频转写")
+        self.root.title(f"本地 ASR 长视频转写 v{app_config.APP_VERSION}")
         self.root.geometry("1120x780")
         self.root.minsize(960, 640)
         try:
@@ -907,7 +907,7 @@ class AsrGui:
 
 def _install_excepthooks() -> None:
     """把未捕获异常写到 logs/ 下的日志文件，避免 GUI 静默退出、方便用户回报问题。"""
-    log_dir = Path(__file__).resolve().parent.parent / "logs"
+    log_dir = app_config.logs_dir()
 
     def _write(text: str) -> None:
         try:
@@ -925,7 +925,7 @@ def _install_excepthooks() -> None:
         try:
             messagebox.showerror(
                 "程序出错",
-                f"{exc_type.__name__}: {exc_value}\n\n详细堆栈已写入 logs/。",
+                f"{exc_type.__name__}: {exc_value}\n\n详细堆栈已写入：\n{log_dir}",
             )
         except tk.TclError:
             pass
@@ -940,8 +940,190 @@ def _install_excepthooks() -> None:
     threading.excepthook = thread_hook
 
 
+def _selftest_report() -> tuple[list[str], bool]:
+    """收集自检信息：打包产物里最容易坏的是原生依赖能否加载。
+
+    返回 (报告行, 是否有失败)。
+    """
+    failed = False
+    lines = [f"asr-gui {app_config.APP_VERSION} 自检", f"时间：{datetime.now():%Y-%m-%d %H:%M:%S}"]
+    lines.append(f"frozen（是否是打包 exe）：{app_config.is_frozen()}")
+    lines.append(f"python：{sys.version.split()[0]}  可执行文件：{sys.executable}")
+    lines.append(f"程序目录：{app_config.app_home()}")
+    lines.append(f"配置目录：{app_config.config_dir()}")
+    lines.append(f"Crash 日志目录：{app_config.logs_dir()}")
+    lines.append(f"默认输出目录：{app_config.default_output_dir()}")
+
+    for name in ("numpy", "av", "sherpa_onnx", "ctranslate2", "tokenizers", "faster_whisper"):
+        try:
+            module = __import__(name)
+            version = getattr(module, "__version__", "?")
+            lines.append(f"依赖 {name}：OK ({version})")
+        except Exception as exc:  # noqa: BLE001 - 自检要把任何异常都报出来
+            failed = True
+            lines.append(f"依赖 {name}：失败 -> {exc.__class__.__name__}: {exc}")
+
+    root = Path(str(app_config.load().get("model_cache_dir") or app_config.discover_cache_dir()))
+    lines.append(f"模型缓存目录：{root}")
+    try:
+        for choice in registry.list_choices(root):
+            lines.append(f"  模型 {choice.model_id}：{choice.status_text}")
+    except OSError as exc:
+        failed = True
+        lines.append(f"  枚举模型失败：{exc}")
+
+    # 真正加载一次 paraformer（若已缓存），验证原生库、VAD、标点模型都能起来。
+    sherpa_dir = root / "sherpa"
+    if (sherpa_dir / "asr" / "model.int8.onnx").is_file():
+        try:
+            transcriber = Transcriber(Transcriber.ENGINE_PARAFORMER, sherpa_dir=sherpa_dir)
+            transcriber.load()
+            lines.append("加载 paraformer-zh：OK（asr + punc + vad 均就绪）")
+        except Exception as exc:  # noqa: BLE001
+            failed = True
+            lines.append(f"加载 paraformer-zh：失败 -> {exc.__class__.__name__}: {exc}")
+    else:
+        lines.append("加载 paraformer-zh：跳过（该目录下没有缓存的 sherpa 模型）")
+
+    lines.append("")
+    if failed:
+        lines.append("结论：有项目未通过，请把本文件内容贴到 issue。")
+    else:
+        lines.append("结论：全部通过，可以正常转写。")
+    return lines, failed
+
+
+def _run_selftest(target: Path, interactive: bool) -> int:
+    lines, failed = _selftest_report()
+    text = "\n".join(lines)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    # 只有双击运行（没给输出文件参数）时才弹窗；给参数就是为了能被脚本/CI 调用。
+    if interactive:
+        try:
+            messagebox.showinfo("asr-gui 自检", text)
+        except tk.TclError:
+            pass
+    return 2 if failed else 0
+
+
+def _run_headless(media: Path, out_txt: Path, model_id: str, device: str, threads: int) -> int:
+    """命令行转写（不弹窗）：给批处理/服务器/自动化用，也方便打包后做端到端验证。"""
+    log_path = out_txt.with_suffix(".log")
+    lines: list[str] = []
+
+    def log(message: str) -> None:
+        stamp = f"[{datetime.now():%H:%M:%S}] "
+        lines.append(stamp + message)
+        try:
+            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
+    try:
+        choice = registry.choice_by_id(model_id)
+        if choice is None:
+            log(f"未知模型：{model_id}")
+            return 2
+        if choice.kind == "sherpa":
+            engine_id = Transcriber.ENGINE_PARAFORMER
+            sherpa_dir = Path(choice.location or "")
+            whisper_dir = Path()
+            device = "cpu"  # paraformer 只能 CPU
+        else:
+            engine_id = Transcriber.ENGINE_BASE
+            sherpa_dir = Path()
+            whisper_dir = Path(choice.location or "")
+        log(f"模型={choice.label}  文件={whisper_dir or sherpa_dir}  设备={device}  线程={threads}")
+        transcriber = Transcriber(
+            engine_id,
+            sherpa_dir=sherpa_dir,
+            whisper_dir=whisper_dir,
+            device=device,
+            num_threads=threads,
+        )
+        transcriber.load()
+        log("模型已加载，开始转写")
+        jsonl_path = out_txt.with_suffix(".jsonl")
+        collected: list[Segment] = []
+
+        def on_progress(done: float, total: float, elapsed: float) -> None:
+            percent = (done / total * 100) if total else 0.0
+            log(f"进度 {percent:5.1f}%  {format_timestamp(done)} / {format_timestamp(total)}")
+
+        def on_segment(segment: Segment) -> None:
+            collected.append(segment)
+
+        transcriber.run(
+            media,
+            jsonl_path,
+            chunk_seconds=CHUNK_SECONDS,
+            progress_cb=on_progress,
+            segment_cb=on_segment,
+        )
+        out_txt.parent.mkdir(parents=True, exist_ok=True)
+        with out_txt.open("w", encoding="utf-8") as handle:
+            for segment in collected:
+                handle.write(f"[{format_timestamp(segment.start)}] {segment.text}\n")
+        log(f"完成：{len(collected)} 段 -> {out_txt}")
+        return 0
+    except CancelledError:
+        log("已取消")
+        return 130
+    except Exception as exc:  # noqa: BLE001 - 命令行模式要把异常写进日志而不是崩掉
+        log(f"失败：{exc.__class__.__name__}: {exc}")
+        return 1
+
+
 def main() -> None:
-    """启动 GUI。"""
+    """启动 GUI。
+
+    另外两种命令行模式（打包后的 exe 同样支持）：
+      * ``--selftest [输出文件]``：环境自检，写报告并退出（0 通过 / 2 有失败）；
+      * ``--transcribe 媒体 [--out 文本] [--model 模型id] [--device cpu|cuda] [--threads N]``：
+        不弹窗的批量转写，日志写在输出文件旁边的 ``.log``。
+    """
+    argv = sys.argv[1:]
+    if "--selftest" in argv:
+        index = argv.index("--selftest")
+        rest = argv[index + 1 :]
+        target = Path(rest[0]) if rest else Path.home() / "asr-gui-selftest.txt"
+        raise SystemExit(_run_selftest(target, interactive=not rest))
+
+    if "--transcribe" in argv:
+        index = argv.index("--transcribe")
+        rest = argv[index + 1 :]
+        if not rest:
+            print("用法：--transcribe <媒体文件> [--out <文本文件>] [--model <模型id>] …")
+            raise SystemExit(2)
+        media = Path(rest[0])
+        cfg = app_config.load()
+        model_id = cfg.get("model_id") or registry.PARAFORMER_ID
+        device = str(cfg.get("device") or "cpu")
+        threads = int(cfg.get("num_threads") or 8)
+        out_arg: str | None = None
+        args = rest[1:]
+        position = 0
+        while position < len(args):
+            flag = args[position]
+            value = args[position + 1] if position + 1 < len(args) else ""
+            if flag == "--out":
+                out_arg = value
+            elif flag == "--model":
+                model_id = value
+            elif flag == "--device":
+                device = value
+            elif flag == "--threads":
+                threads = max(1, min(32, int(value or threads)))
+            position += 2
+        out_txt = Path(out_arg) if out_arg else Path(str(cfg.get("output_dir"))) / (
+            media.stem + ".txt"
+        )
+        raise SystemExit(_run_headless(media, out_txt, str(model_id), device, threads))
+
     _install_excepthooks()
     root = tk.Tk()
     AsrGui(root)

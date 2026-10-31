@@ -44,7 +44,24 @@
 环境要求：**Python 3.9+**，x86-64 或 Apple Silicon 的普通笔记本都能跑 CPU 推理；faster-whisper 走
 GPU 时另需 NVIDIA 显卡 + CUDA 12。
 
-### Windows
+### Windows：不想装 Python？直接下 exe
+
+在 [Releases](https://github.com/acemilee/asr-gui/releases) 页面下载 `ASR-GUI-v0.1.0-win64.exe`（约
+109 MB），双击即可运行；模型不随包分发，首次在界面里选模型点「下载模型」，或点「定位/导入…」指向
+已有的模型缓存目录。校验文件完整性：
+
+```bat
+certutil -hashfile ASR-GUI-v0.1.0-win64.exe SHA256
+```
+
+exe 还带两个命令行入口，方便排查问题与批处理：
+
+```bat
+ASR-GUI.exe --selftest "%TEMP%\asr-gui-selftest.txt"                     :: 环境自检
+ASR-GUI.exe --transcribe sample.m4a --out out.txt --model paraformer-zh   :: 无界面转写
+```
+
+### Windows：从源码跑
 
 ```bat
 setup.bat

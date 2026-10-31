@@ -26,6 +26,30 @@ class TestPaths:
     def test_default_output_dir_is_repo_out(self) -> None:
         assert app_config.default_output_dir() == app_config.repo_root() / "out"
 
+    def test_not_frozen_in_tests(self) -> None:
+        assert app_config.is_frozen() is False
+        assert app_config.app_home() == app_config.repo_root()
+        assert app_config.logs_dir() == app_config.repo_root() / "logs"
+
+    def test_frozen_uses_exe_folder_and_user_dirs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config_home: Path
+    ) -> None:
+        """打包成 exe 后：模型目录从 exe 旁边找，输出/crash 日志落到用户目录。"""
+        exe_dir = tmp_path / "downloaded" / "asr-gui"
+        exe_dir.mkdir(parents=True)
+        monkeypatch.setattr(app_config.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(app_config.sys, "executable", str(exe_dir / "ASR-GUI.exe"))
+
+        assert app_config.is_frozen() is True
+        assert app_config.app_home() == exe_dir
+        assert app_config.default_output_dir() == Path.home() / "asr-gui-output"
+        assert app_config.logs_dir() == config_home / "logs"
+        # 缓存候选目录里不能再有 _MEI 临时解包目录
+        assert str(app_config.default_output_dir()).find("_MEI") == -1
+
+    def test_version_is_exposed(self) -> None:
+        assert app_config.APP_VERSION.count(".") == 2
+
 
 class TestDiscoverCacheDir:
     def test_env_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

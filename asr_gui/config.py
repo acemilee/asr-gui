@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 CONFIG_DIR_ENV = "ASR_GUI_CONFIG_DIR"
 CONFIG_FILENAME = "config.json"
+
+# Keep in sync with pyproject.toml / the git tag. Shown in the window title and
+# in the packaged exe name, so it must be a plain string literal here.
+APP_VERSION = "0.1.0"
 
 DEFAULT_MODEL_ID = "paraformer-zh"
 DEFAULT_DEVICE = "cpu"
@@ -43,16 +48,48 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def is_frozen() -> bool:
+    """True when running from the PyInstaller build (``ASR-GUI.exe``)."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def app_home() -> Path:
+    """Folder that "owns" the app: the checkout, or the exe's folder when frozen.
+
+    In a frozen build ``__file__`` points inside the temporary ``_MEIxxxx``
+    extraction directory, so model folders placed next to the exe would be
+    missed - hence this helper.
+    """
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return repo_root()
+
+
 def default_output_dir() -> Path:
+    """Where transcripts go by default.
+
+    A source checkout writes to ``<repo>/out``. The packaged exe cannot assume
+    its own folder is writable (users drop it in Downloads, Program Files, a USB
+    stick...), so it uses a plain folder in the home directory instead.
+    """
+    if is_frozen():
+        return Path.home() / "asr-gui-output"
     return repo_root() / "out"
+
+
+def logs_dir() -> Path:
+    """Crash logs: ``<repo>/logs`` in a checkout, ``%APPDATA%\\asr-gui\\logs`` when frozen."""
+    if is_frozen():
+        return config_dir() / "logs"
+    return repo_root() / "logs"
 
 
 # Candidate locations that already hold a model cache, in priority order.
 def _cache_candidates() -> list[Path]:
-    root = repo_root()
+    home = app_home()
     return [
-        root / "models",
-        root / "_model_cache",
+        home / "models",
+        home / "_model_cache",
         Path.cwd() / "models",
     ]
 

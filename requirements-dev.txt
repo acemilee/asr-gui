@@ -11,3 +11,5 @@
 
 pytest>=8,<9
 ruff>=0.6
+# Only needed to build the Windows exe (see packaging/). Not required for tests.
+pyinstaller>=6.16
