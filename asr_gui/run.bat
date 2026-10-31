@@ -27,7 +27,13 @@ if not errorlevel 1 (
     goto have_py
 )
 
-rem 4) Portable bundle layout used by some releases
+rem 4) Archived toolchain in this working copy: _local\VideoToNo-1.4.6-portable
+if exist "%HERE%..\_local\VideoToNo-1.4.6-portable\venv\Scripts\python.exe" (
+    set "PY=%HERE%..\_local\VideoToNo-1.4.6-portable\venv\Scripts\python.exe"
+    goto have_py
+)
+
+rem 5) Portable bundle layout used by some releases
 if exist "%HERE%..\VideoToNo-1.4.6-portable\venv\Scripts\python.exe" (
     set "PY=%HERE%..\VideoToNo-1.4.6-portable\venv\Scripts\python.exe"
     goto have_py

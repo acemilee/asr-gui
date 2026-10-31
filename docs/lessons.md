@@ -88,3 +88,15 @@ paraformer-zh 的 ONNX 含 `fsmn_block`（流式结构）→ **只能 CPU**。
 **布局**：`ScrolledText` 默认 `width=80`（字符），放进 `PanedWindow` 后把 `winfo_reqwidth` 顶到 **1211 px**，而窗口只有 1120 宽 → 右侧控件被裁。改为 `width=30/40` 后 req 降到 **858**。诊断方法是打印每个 `Labelframe` 的 `winfo_reqwidth()` 逐个排查，而不是凭肉眼猜。
 
 **截图**：显示器缩放 150% 时，DPI-unaware 的 Python 进程里 Tk 的 `winfo_width()`（1120 逻辑）与物理像素（1680）不一致，`ImageGrab(bbox=winfo_*)` 只能截到窗口左上 2/3，看起来像"窗口被裁了"，其实布局没问题。正确姿势：脚本**第一行** `ctypes.windll.user32.SetProcessDPIAware()`，再用 `GetWindowRect(int(root.wm_frame(), 16))` 作为 bbox。窗口被别的程序挡在前台时，`SetForegroundWindow` 常失败，用 Tk 自己的 `root.attributes("-topmost", True)` 才可靠；若连屏幕抓取都不行，`PrintWindow(hwnd, hdc, 2)` 可在窗口被遮挡时照样渲染。
+
+## 9. PyInstaller 打包用错解释器：打进别人家的依赖树（2026-10-31 踩，最贵的一次）
+
+**事故**：给 exe 新增「视频链接」来源（多一个 `yt_dlp`）后重建，产物从 109 MB **涨到 588 MB**，且运行时 `av`/`sherpa_onnx`/`ctranslate2`/`faster_whisper` 全部 `ModuleNotFoundError`。
+
+**根因不在 yt-dlp**：`packaging\build.bat` 的解释器发现顺序是 `ASR_PYTHON` → `..\.venv` → **PATH 上的 `python.exe`**。本机没有 `.venv`，于是它挑了系统 Python（`F:\python313`）——那个环境里装满了 tensorflow / transformers / langchain / cv2 等无关重量级包，PyInstaller 顺着某条可选 import 把整棵依赖树拖进了产物（`tensorflow\python\_pywrap_tensorflow_common.dll` 一个文件就 944.6 MB），同时又**没有**本项目真正需要的 av / sherpa_onnx / ctranslate2。
+
+**识别信号**：exe 自检里 `numpy 2.2.6`、`tokenizers 0.22.2`（系统 Python 的版本）而 venv 是 2.5.4 / 0.23.3 —— **自检打印的依赖版本是判断"exe 是用哪个解释器打的"最直接的证据**。之前 109 MB 那次能正常，是因为我手动用 venv 的 python 直接调了 `-m PyInstaller`，绕过了 `build.bat` 的发现逻辑。
+
+**定位体积的方法**：`build\asr-gui\Analysis-00.toc` 里每个 `PYMODULE`/`BINARY` 都是绝对路径，按顶层包名聚合大小即可一眼看出谁在膨胀（一行 python 就能统计）。
+
+**规则**：①打包脚本必须在动手前**校验解释器依赖**（本项目已在 `build.bat` 加 `[0/3]` 预检：缺 `numpy/av/sherpa_onnx/ctranslate2/faster_whisper/tokenizers/yt_dlp/PyInstaller` 就直接报错退出，并提示 `ASR_PYTHON`），绝不允许"找不到 venv 就静默用 PATH 上的 python"；②产物大小突变（>1.5 倍）必须当成 bug 查，不能当"加了功能所以变大"接受；③`collect_all()` 会把包的元数据/可选依赖一起收，纯 Python 包（如 yt-dlp）用 `collect_submodules()` 更干净。

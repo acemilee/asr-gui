@@ -2,6 +2,8 @@
 rem Build the single-file Windows exe (dist\ASR-GUI.exe) with PyInstaller.
 rem Requires: a Python 3.9+ environment with requirements.txt + pyinstaller installed.
 rem Usage: double-click this file, or run packaging\build.bat from any directory.
+rem Tip: set ASR_PYTHON to pick the interpreter explicitly, e.g.
+rem     set ASR_PYTHON=C:\path\to\venv\Scripts\python.exe
 
 setlocal enableextensions
 set "HERE=%~dp0"
@@ -12,6 +14,11 @@ if defined ASR_PYTHON set "PY=%ASR_PYTHON%"
 if not defined PY if exist "%REPO%\.venv\Scripts\python.exe" set "PY=%REPO%\.venv\Scripts\python.exe"
 if not defined PY for %%I in (python.exe) do if not defined PY set "PY=%%~$PATH:I"
 if not defined PY goto :nopython
+
+echo [0/3] Checking interpreter dependencies ...
+"%PY%" -c "import sys; print('interpreter:', sys.executable)"
+"%PY%" -c "import importlib.util as u, sys; need = ('numpy', 'av', 'sherpa_onnx', 'ctranslate2', 'faster_whisper', 'tokenizers', 'yt_dlp', 'PyInstaller'); missing = [m for m in need if u.find_spec(m) is None]; print('missing:', ' '.join(missing) or 'none'); sys.exit(1 if missing else 0)"
+if errorlevel 1 goto :baddeps
 
 if not exist "%HERE%icon.ico" (
     echo [1/3] Generating packaging\icon.ico ...
@@ -32,6 +39,17 @@ goto :eof
 
 :nopython
 echo ERROR: python.exe not found. Set ASR_PYTHON to a python executable, or create .venv.
+pause
+exit /b 1
+
+:baddeps
+echo.
+echo ERROR: the interpreter above is missing one or more runtime dependencies.
+echo Building with it would produce a broken exe (imports would fail at runtime),
+echo or a huge one (if that interpreter happens to have unrelated heavy packages).
+echo Install the dependencies into it:
+echo     "%PY%" -m pip install -r "%REPO%\requirements.txt" "pyinstaller>=6.16"
+echo or point ASR_PYTHON at the interpreter that already has them.
 pause
 exit /b 1
 

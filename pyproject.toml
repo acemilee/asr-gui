@@ -6,7 +6,7 @@
 # is decided -- see the NOTE further down.
 [project]
 name = "asr-gui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Offline long-video speech-to-text GUI: tkinter front end on top of sherpa-onnx (paraformer-zh) and faster-whisper."
 readme = "README.md"
 license = { text = "MIT" }

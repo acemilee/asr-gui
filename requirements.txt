@@ -13,6 +13,11 @@ faster-whisper>=1.2,<2
 av>=13,<20
 numpy>=1.24
 
+# Pulling audio straight from a video page URL ("视频链接" source).
+# yt-dlp is used as a library only - no ffmpeg binary is required, because the
+# downloaded audio is handed to PyAV for decoding.
+yt-dlp>=2024.8.6
+
 # ---------------------------------------------------------------------------
 # GPU support (optional, NVIDIA only)
 #

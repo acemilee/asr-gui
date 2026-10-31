@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 HERE = Path(SPECPATH)  # noqa: F821  (SPECPATH 由 PyInstaller 注入)
 REPO = HERE.parent
@@ -45,6 +45,12 @@ for package in (
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hidden
+
+# yt-dlp 是「视频链接」来源用的纯 Python 包，按子模块收集即可（不带元数据/可选依赖）。
+try:
+    hiddenimports += collect_submodules("yt_dlp")
+except Exception as exc:
+    print(f"[spec] skip yt_dlp: {exc}")
 
 # 许可证随 exe 一起分发（MIT / 第三方声明）。
 for extra in ("LICENSE", "THIRD_PARTY_NOTICES.md"):

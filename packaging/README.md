@@ -36,9 +36,10 @@ python -m PyInstaller --clean --noconfirm packaging\asr-gui.spec
 
 ## 打进去什么 / What goes in
 
-- 程序本体、`engine.py` / `config.py` / `downloader.py` / `models_registry.py`
+- 程序本体、`engine.py` / `config.py` / `downloader.py` / `models_registry.py` / `sources.py`
 - tkinter、PyAV（自带 FFmpeg）、sherpa-onnx（paraformer-zh + VAD + 标点）、
   faster-whisper / ctranslate2 / tokenizers / huggingface_hub
+- yt-dlp（「视频链接」来源：只解析页面 + 下载音频，不需要外部 ffmpeg）
 - `LICENSE`、`THIRD_PARTY_NOTICES.md`
 
 ## 故意不打包什么 / What is deliberately excluded
@@ -57,6 +58,7 @@ python -m PyInstaller --clean --noconfirm packaging\asr-gui.spec
 | 模型缓存（默认） | `%APPDATA%\asr-gui\models` |
 | 崩溃日志 | `%APPDATA%\asr-gui\logs\error-<日期>.log` |
 | 默认输出目录 | `%USERPROFILE%\asr-gui-output` |
+| 链接下载的音频 | `%APPDATA%\asr-gui\downloads` |
 | onefile 解包 | `%TEMP%\_MEIxxxx`（退出后自动清理） |
 
 ## 构建后自检 / Post-build check

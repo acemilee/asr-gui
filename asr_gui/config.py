@@ -21,7 +21,7 @@ CONFIG_FILENAME = "config.json"
 
 # Keep in sync with pyproject.toml / the git tag. Shown in the window title and
 # in the packaged exe name, so it must be a plain string literal here.
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 
 DEFAULT_MODEL_ID = "paraformer-zh"
 DEFAULT_DEVICE = "cpu"
@@ -77,6 +77,13 @@ def default_output_dir() -> Path:
     return repo_root() / "out"
 
 
+def downloads_dir() -> Path:
+    """Where audio pulled from a video URL lands before transcription."""
+    if is_frozen():
+        return config_dir() / "downloads"
+    return app_home() / "downloads"
+
+
 def logs_dir() -> Path:
     """Crash logs: ``<repo>/logs`` in a checkout, ``%APPDATA%\\asr-gui\\logs`` when frozen."""
     if is_frozen():
@@ -92,6 +99,22 @@ def _cache_candidates() -> list[Path]:
         home / "_model_cache",
         Path.cwd() / "models",
     ]
+
+
+def effective_cache_dir(config: dict | None = None) -> Path:
+    """Resolve the model cache directory: env var > saved config > discovery.
+
+    环境变量优先，是因为它最明确地表态「这次就用这个目录」；配置文件里的值
+    可能是上一次在别台机器/别个盘上保存下来的。
+    """
+    env_value = os.environ.get("ASR_GUI_MODEL_DIR", "").strip()
+    if env_value:
+        return Path(env_value).expanduser()
+    if config:
+        value = str(config.get("model_cache_dir") or "").strip()
+        if value:
+            return Path(value).expanduser()
+    return discover_cache_dir()
 
 
 def discover_cache_dir() -> Path:

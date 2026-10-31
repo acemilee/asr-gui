@@ -25,6 +25,11 @@ disk after every chunk, and the whole run can be cancelled and resumed at any ti
 
 ## Features
 
+- **Three input sources** - paste a video page URL (Bilibili / Douyin / YouTube) and only the
+  audio track is downloaded (no transcoding, no video bytes), pick a local audio/video file, or feed
+  a `.srt` / `.vtt` subtitle file straight through - the subtitle path skips the models entirely and
+  finishes in a second. URL downloads use [yt-dlp](https://github.com/yt-dlp/yt-dlp) and fetch only
+  the first part of a multi-part video.
 - **8 model tiers in one dropdown** — from `tiny` (≈75 MB, instant) to `large-v3` (≈3.1 GB) and
   the Chinese-tuned `paraformer-zh`. The list shows `已缓存` (cached) or
   `未缓存·需下载 ~XXX MB` (not cached · download size) per tier.
@@ -49,6 +54,10 @@ disk after every chunk, and the whole run can be cancelled and resumed at any ti
 
 ## Quick start
 
+Runtime dependencies (`pip install -r requirements.txt`): `sherpa-onnx` (paraformer-zh / VAD /
+punctuation), `faster-whisper` + `ctranslate2` (whisper tiers), `av` (PyAV, streaming decode),
+`numpy`, and `yt-dlp` (only for the video-URL source).
+
 Requirements: **Python 3.9+**, a CPU that can run ONNX/CTranslate2 (any x86-64 or Apple Silicon
 laptop is fine), and optionally an NVIDIA GPU with CUDA 12 for the faster-whisper path.
 
@@ -67,8 +76,13 @@ The exe also accepts two command-line entry points (handy for troubleshooting an
 
 ```bat
 ASR-GUI.exe --selftest "%TEMP%\asr-gui-selftest.txt"                     :: environment check
-ASR-GUI.exe --transcribe sample.m4a --out out.txt --model paraformer-zh   :: headless run
+ASR-GUI.exe --transcribe sample.m4a --out out.txt --model paraformer-zh   :: local file
+ASR-GUI.exe --transcribe "https://www.bilibili.com/video/BV..." --out out.txt  :: url (audio only)
+ASR-GUI.exe --transcribe sample.srt --out out.txt                         :: subtitle file
 ```
+
+`--transcribe` accepts the same three sources as the GUI: a local media file, a video page
+URL (audio only), or a `.srt` / `.vtt` subtitle file (no model needed).
 
 ### Windows from source
 
@@ -110,6 +124,20 @@ python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 The `gpu` extra in `pyproject.toml` lists the same two packages (enabled once the packaging story is
 settled). `paraformer-zh` always runs on CPU; the UI locks the device selector to CPU when it is
 selected.
+
+## Input sources
+
+The "source" dropdown at the top decides what one run consumes:
+
+| Source | You provide | What happens | Needs a model |
+| --- | --- | --- | --- |
+| Video URL | a page URL (`https://...`); the 粘贴 button pastes from the clipboard | yt-dlp downloads the audio track only into `<app dir>/downloads` (`%APPDATA%\asr-gui\downloads` for the exe), then the usual chunked transcription runs | yes |
+| Local file | path to an audio or video file | decoded and transcribed directly; common containers are fine | yes |
+| Subtitle file | a `.srt` / `.vtt` file | parsed into txt + jsonl immediately | **no** |
+
+Downloading audio only is deliberate: a video track can be gigabytes while transcription needs just
+the audio, and PyAV already decodes `m4a` / `webm` without an ffmpeg binary. Pressing stop mid-download
+aborts yt-dlp and leaves the `.part` fragments in `downloads` for the next attempt to resume.
 
 ## Models
 

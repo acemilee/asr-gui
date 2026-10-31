@@ -67,7 +67,12 @@ Desktop.ini
 *.orig
 _scratch/
 
-# --- Local working data (this checkout only) ------------------------------
+# --- Local working data
+# Archived upstream apps / model caches / run outputs (moved out of the repo root)
+_local/ (this checkout only) ------------------------------
+# Audio downloaded from video URLs ("视频链接" source) while testing.
+downloads/
+
 # The upstream portable app plus the 10 h test media live here; they are
 # several GB and never belong in git.
 workspace/

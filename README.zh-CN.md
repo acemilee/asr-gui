@@ -23,6 +23,14 @@
 
 ## 特性
 
+- **三种输入来源**——「视频链接」直接粘贴 B 站 / 抖音 / YouTube 页面链接，程序只把音频轨下下来
+  （不转码、不碰画面），再交给转写引擎；「本地文件」选硬盘上的音频或视频；「字幕文件」直接吃
+  `.srt` / `.vtt`，不加载模型、几乎瞬间出稿。链接下载走 [yt-dlp](https://github.com/yt-dlp/yt-dlp)，
+  默认只取第一个分 P，避免一次拖几个小时。
+- **三种输入来源**——「视频链接」直接粘贴 B 站 / 抖音 / YouTube 页面链接，程序只把音频轨下下来
+  （不转码、不碰画面），再交给转写引擎；「本地文件」选硬盘上的音频或视频；「字幕文件」直接吃
+  `.srt` / `.vtt`，不加载模型、几乎瞬间出稿。链接下载走 [yt-dlp](https://github.com/yt-dlp/yt-dlp)，
+  默认只取第一个分 P，避免一次拖几个小时。
 - **下拉里 8 档模型**——从 `tiny`（约 75 MB，几乎瞬秒）到 `large-v3`（约 3.1 GB），外加为中文调过的
   `paraformer-zh`。每档直接显示 `已缓存` 或 `未缓存·需下载 ~XXX MB`。
 - **下载默认走镜像**——默认 `https://hf-mirror.com`，界面里可切回 `https://huggingface.co`。走的是
@@ -43,6 +51,14 @@
 
 ## 快速开始
 
+运行依赖（`pip install -r requirements.txt`）：`sherpa-onnx`（paraformer-zh / VAD / 标点）、
+`faster-whisper` + `ctranslate2`（whisper 各档）、`av`（PyAV，流式解码长视频）、`numpy`，以及
+`yt-dlp`（只用于「视频链接」来源；不用链接可以不管它）。
+
+运行依赖（`pip install -r requirements.txt`）：`sherpa-onnx`（paraformer-zh / VAD / 标点）、
+`faster-whisper` + `ctranslate2`（whisper 各档）、`av`（PyAV，流式解码长视频）、`numpy`，以及
+`yt-dlp`（只用于「视频链接」来源；不用链接可以不管它）。
+
 环境要求：**Python 3.9+**，x86-64 或 Apple Silicon 的普通笔记本都能跑 CPU 推理；faster-whisper 走
 GPU 时另需 NVIDIA 显卡 + CUDA 12。
 
@@ -60,8 +76,12 @@ exe 还带两个命令行入口，方便排查问题与批处理：
 
 ```bat
 ASR-GUI.exe --selftest "%TEMP%\asr-gui-selftest.txt"                     :: 环境自检
-ASR-GUI.exe --transcribe sample.m4a --out out.txt --model paraformer-zh   :: 无界面转写
+ASR-GUI.exe --transcribe sample.m4a --out out.txt --model paraformer-zh   :: 本地文件转写
+ASR-GUI.exe --transcribe "https://www.bilibili.com/video/BV..." --out out.txt  :: 链接（自动下音频）
+ASR-GUI.exe --transcribe sample.srt --out out.txt                         :: 字幕文件直接出稿
 ```
+
+`--transcribe` 的输入与界面里的「来源」一致：本地音视频、视频页链接（只下音频）、或 `.srt` / `.vtt` 字幕文件（不需要模型）。
 
 ### Windows：从源码跑
 
@@ -101,6 +121,34 @@ python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 
 `pyproject.toml` 里的可选 extra `gpu` 列的就是这两个包（等打包方式确定后即可直接安装）。
 `paraformer-zh` 只能用 CPU，选中它时界面会把设备锁到 cpu。
+
+## 三种输入来源
+
+界面最上面的「来源」下拉框决定这一轮吃什么：
+
+| 来源 | 你给它什么 | 它做什么 | 需要模型吗 |
+| --- | --- | --- | --- |
+| 视频链接 | 页面 URL（`https://…`），点「粘贴」可直接读剪贴板 | 用 yt-dlp 只下音频轨到 `<程序目录>/downloads`（exe 版是 `%APPDATA%\asr-gui\downloads`），再照常分块转写 | 需要 |
+| 本地文件 | 音频或视频文件的路径 | 直接解码转写，常见容器都行 | 需要 |
+| 字幕文件 | `.srt` / `.vtt` 文件 | 解析时间轴与正文，立刻写 txt + jsonl | **不需要** |
+
+链接下载是有意做成「只下音频」的：B 站等站的视频轨动辄上 GB，而转写只需要音轨；不转码是因为
+PyAV 本来就能直接解 `m4a` / `webm`，多一道 ffmpeg 反而更容易出问题。下载中途点「停止」，
+yt-dlp 会被打断，已下载的 `.part` 片段留在 `downloads` 里，下次自动续传。
+
+## 三种输入来源
+
+界面最上面的「来源」下拉框决定这一轮吃什么：
+
+| 来源 | 你给它什么 | 它做什么 | 需要模型吗 |
+| --- | --- | --- | --- |
+| 视频链接 | 页面 URL（`https://…`），点「粘贴」可直接读剪贴板 | 用 yt-dlp 只下音频轨到 `<程序目录>/downloads`（exe 版是 `%APPDATA%\asr-gui\downloads`），再照常分块转写 | 需要 |
+| 本地文件 | 音频或视频文件的路径 | 直接解码转写，常见容器都行 | 需要 |
+| 字幕文件 | `.srt` / `.vtt` 文件 | 解析时间轴与正文，立刻写 txt + jsonl | **不需要** |
+
+链接下载是有意做成「只下音频」的：B 站等站的视频轨动辄上 GB，而转写只需要音轨；不转码是因为
+PyAV 本来就能直接解 `m4a` / `webm`，多一道 ffmpeg 反而更容易出问题。下载中途点「停止」，
+yt-dlp 会被打断，已下载的 `.part` 片段留在 `downloads` 里，下次自动续传。
 
 ## 模型
 

@@ -51,10 +51,31 @@ class TestPublicContract:
             "on_stop",
             "on_close",
             "_worker",
+            "_prepare_engine",
+            "_url_worker",
+            "_subtitle_worker",
+            "_on_source_change",
+            "_update_download_progress",
         ],
     )
     def test_methods_exist(self, method: str) -> None:
         assert callable(getattr(app.AsrGui, method, None))
+
+    def test_source_choices(self) -> None:
+        """三种输入来源：视频链接 / 本地文件 / 字幕文件。"""
+        assert app.SOURCE_CHOICES == [app.SOURCE_URL, app.SOURCE_FILE, app.SOURCE_SUB]
+        assert app.SOURCE_CHOICES == ["视频链接", "本地文件", "字幕文件"]
+        assert set(app.SOURCE_HINTS) == set(app.SOURCE_CHOICES)
+        assert app.SUBTITLE_FILE_TYPES[0][1] == "*.srt *.vtt"
+
+    def test_subtitle_source_bypasses_model(self) -> None:
+        """字幕来源不需要模型：_prepare_engine 直接返回空引擎。"""
+        gui = app.AsrGui.__new__(app.AsrGui)  # 不建窗口，只调用纯分支
+        engine_id, sherpa_dir, whisper_dir, device, threads = gui._prepare_engine(
+            app.SOURCE_SUB
+        )
+        assert (engine_id, sherpa_dir, whisper_dir, device) == ("", "", "", "cpu")
+        assert 1 <= threads <= 32
 
     def test_engine_constants_match(self) -> None:
         assert Transcriber.ENGINE_PARAFORMER == "paraformer-zn"

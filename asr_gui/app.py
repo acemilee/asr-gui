@@ -37,6 +37,7 @@ from engine import CancelledError, Segment, Transcriber, format_timestamp
 import config as app_config
 import downloader
 import models_registry as registry
+import sources
 
 # 引擎分块长度（秒），与 engine 默认一致
 CHUNK_SECONDS = 300
@@ -51,11 +52,35 @@ ENDPOINT_LABELS = {
 ENDPOINT_LABEL_TO_KEY = {v: k for k, v in ENDPOINT_LABELS.items()}
 ENDPOINT_KEY_TO_LABEL = dict(ENDPOINT_LABELS)
 
+# 输入来源：视频链接 / 本地文件 / 字幕文件。字幕直接出稿，不需要模型。
+SOURCE_URL = "视频链接"
+SOURCE_FILE = "本地文件"
+SOURCE_SUB = "字幕文件"
+SOURCE_CHOICES = [SOURCE_URL, SOURCE_FILE, SOURCE_SUB]
+SOURCE_HINTS = {
+    SOURCE_URL: "粘贴 B 站 / 抖音 / YouTube 等视频页链接，只取音频，不转码",
+    SOURCE_FILE: "本地音频或视频文件，常见格式都能解码",
+    SOURCE_SUB: "直接读 .srt / .vtt 出稿，不用模型，几乎瞬间完成",
+}
+SUBTITLE_FILE_TYPES = [("字幕文件", "*.srt *.vtt"), ("所有文件", "*.*")]
+
 MEDIA_FILE_TYPES = [
     ("媒体文件", "*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.opus *.mp4 *.mkv *.mov *.webm"),
     ("音频文件", "*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.opus"),
     ("所有文件", "*.*"),
 ]
+
+
+def fmt_bytes(size: float) -> str:
+    """把字节数变成人看得懂的大小。"""
+    value = float(size or 0.0)
+    if value < 1024.0:
+        return f"{value:.0f} B"
+    for unit in ("KB", "MB", "GB"):
+        value /= 1024.0
+        if value < 1024.0 or unit == "GB":
+            return f"{value:.1f} {unit}"
+    return f"{value:.1f} GB"
 
 
 def fmt_dur(seconds: float) -> str:
@@ -130,7 +155,13 @@ class AsrGui:
         self.choices: list[registry.ModelChoice] = []
 
         # ---- 界面变量 ----
+        source = str(self.cfg.get("source") or SOURCE_FILE)
+        if source not in SOURCE_CHOICES:
+            source = SOURCE_FILE
+        self.var_source = tk.StringVar(value=source)
         self.var_media = tk.StringVar(value=str(self.cfg.get("last_media") or ""))
+        self.var_media_label = tk.StringVar(value="音频/视频：")
+        self.var_source_hint = tk.StringVar(value=SOURCE_HINTS[SOURCE_FILE])
         self.var_model = tk.StringVar(value="")
         self.var_model_status = tk.StringVar(value="")
         self.var_model_path = tk.StringVar(value="")
@@ -153,9 +184,10 @@ class AsrGui:
         self.var_hint = tk.StringVar(value="")
 
         self._build()
+        self._on_source_change()
         self._refresh_models(initial_model=str(self.cfg.get("model_id") or registry.PARAFORMER_ID))
         self._log("界面就绪。先选模型：未缓存的点「下载模型」，已缓存的可直接开始。")
-        self._log(f"模型缓存目录：{self.cfg.get('model_cache_dir')}")
+        self._log(f"模型缓存目录：{app_config.effective_cache_dir(self.cfg)}")
         self._log(f"输出目录：{self.var_outdir.get()}")
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -175,36 +207,48 @@ class AsrGui:
         f1.grid(row=0, column=0, sticky="ew")
         f1.columnconfigure(1, weight=1)
 
-        ttk.Label(f1, text="音频文件：").grid(row=0, column=0, sticky="w")
-        self.ent_media = ttk.Entry(f1, textvariable=self.var_media, width=40)
-        self.ent_media.grid(row=0, column=1, sticky="ew")
-        self.btn_media = ttk.Button(f1, text="浏览…", command=self._browse_media)
-        self.btn_media.grid(row=0, column=2, padx=(6, 0))
+        ttk.Label(f1, text="来源：").grid(row=0, column=0, sticky="w")
+        self.cmb_source = ttk.Combobox(
+            f1, textvariable=self.var_source, values=SOURCE_CHOICES, state="readonly", width=10
+        )
+        self.cmb_source.grid(row=0, column=1, sticky="w")
+        self.cmb_source.bind("<<ComboboxSelected>>", self._on_source_change)
+        ttk.Label(f1, textvariable=self.var_source_hint, foreground="#31708f").grid(
+            row=0, column=2, columnspan=3, sticky="w", padx=(12, 0)
+        )
 
-        ttk.Label(f1, text="模型：").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(f1, textvariable=self.var_media_label).grid(
+            row=1, column=0, sticky="w", pady=(8, 0)
+        )
+        self.ent_media = ttk.Entry(f1, textvariable=self.var_media, width=40)
+        self.ent_media.grid(row=1, column=1, sticky="ew", pady=(8, 0))
+        self.btn_media = ttk.Button(f1, text="浏览…", command=self._browse_media)
+        self.btn_media.grid(row=1, column=2, padx=(6, 0), pady=(8, 0))
+
+        ttk.Label(f1, text="模型：").grid(row=2, column=0, sticky="w", pady=(8, 0))
         self.cmb_model = ttk.Combobox(
             f1, textvariable=self.var_model, values=[], state="readonly"
         )
-        self.cmb_model.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        self.cmb_model.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(8, 0))
         self.cmb_model.bind("<<ComboboxSelected>>", self._on_model_change)
         ttk.Label(f1, textvariable=self.var_model_status, foreground="#31708f").grid(
-            row=1, column=3, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0)
+            row=2, column=3, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 0)
         )
 
-        ttk.Label(f1, text="设备：").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(f1, text="设备：").grid(row=3, column=0, sticky="w", pady=(8, 0))
         self.cmb_device = ttk.Combobox(
             f1, textvariable=self.var_device, values=["cpu", "cuda"], state="readonly", width=10
         )
-        self.cmb_device.grid(row=2, column=1, sticky="w", pady=(8, 0))
+        self.cmb_device.grid(row=3, column=1, sticky="w", pady=(8, 0))
 
-        ttk.Label(f1, text="线程数：").grid(row=2, column=2, sticky="w", padx=(12, 0))
+        ttk.Label(f1, text="线程数：").grid(row=3, column=2, sticky="w", padx=(12, 0))
         self.spin_threads = ttk.Spinbox(
             f1, from_=1, to=32, textvariable=self.var_threads, width=6
         )
-        self.spin_threads.grid(row=2, column=3, sticky="w", pady=(8, 0))
+        self.spin_threads.grid(row=3, column=3, sticky="w", pady=(8, 0))
 
         ttk.Label(f1, textvariable=self.var_hint, foreground="#8a6d3b").grid(
-            row=3, column=0, columnspan=5, sticky="w", pady=(6, 0)
+            row=4, column=0, columnspan=5, sticky="w", pady=(6, 0)
         )
 
         # ---------------------------------------------------- 模型文件与下载
@@ -237,7 +281,7 @@ class AsrGui:
         self.btn_refresh_models.grid(row=1, column=2, padx=(6, 0), pady=(8, 0))
         ttk.Label(
             f2,
-            text=f"缓存目录：{self.cfg.get('model_cache_dir')}",
+            text=f"缓存目录：{app_config.effective_cache_dir(self.cfg)}",
             foreground="#666666",
             wraplength=1010,
         ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
@@ -299,9 +343,45 @@ class AsrGui:
     # ============================================================ 交互回调
 
     def _browse_media(self) -> None:
-        path = filedialog.askopenfilename(title="选择音频文件", filetypes=MEDIA_FILE_TYPES)
+        """按当前来源决定按钮行为：链接=从剪贴板粘贴，文件=选媒体，字幕=选字幕。"""
+        source = self.var_source.get()
+        if source == SOURCE_URL:
+            try:
+                text = self.root.clipboard_get().strip()
+            except tk.TclError:
+                self._log("剪贴板里没有文本，请手动粘贴链接。")
+                return
+            if text:
+                self.var_media.set(text)
+                self._log(f"已从剪贴板粘贴：{text[:80]}")
+            return
+        if source == SOURCE_SUB:
+            path = filedialog.askopenfilename(title="选择字幕文件", filetypes=SUBTITLE_FILE_TYPES)
+        else:
+            path = filedialog.askopenfilename(title="选择音频/视频文件", filetypes=MEDIA_FILE_TYPES)
         if path:
             self.var_media.set(path)
+            if not self.var_name.get().strip() or self.var_name.get().strip() == "transcript":
+                self.var_name.set(Path(path).stem)
+
+    def _on_source_change(self, _event=None) -> None:
+        """切换来源：改标签文字、提示语，并按需要禁用「浏览…」。"""
+        source = self.var_source.get()
+        if source == SOURCE_SUB:
+            self.var_media_label.set("字幕文件：")
+            self.btn_media.configure(text="浏览…", state="normal")
+        elif source == SOURCE_URL:
+            self.var_media_label.set("视频链接：")
+            self.btn_media.configure(text="粘贴", state="normal")
+        else:
+            self.var_media_label.set("音频/视频：")
+            self.btn_media.configure(text="浏览…", state="normal")
+        self.var_source_hint.set(SOURCE_HINTS.get(source, ""))
+        if source == SOURCE_SUB:
+            self.var_hint.set("提示：字幕文件直接出稿，模型与设备设置不参与。")
+        else:
+            self.var_hint.set("")
+            self._apply_model_state()
 
     def _browse_dir(self, var: tk.StringVar) -> None:
         path = filedialog.askdirectory(title="选择目录")
@@ -312,8 +392,7 @@ class AsrGui:
 
     def _refresh_models(self, initial_model: str = "") -> None:
         """重新扫描模型缓存目录，重建 8 档模型下拉框并刷新状态。"""
-        root_text = str(self.cfg.get("model_cache_dir") or "").strip()
-        root = Path(root_text) if root_text else app_config.discover_cache_dir()
+        root = app_config.effective_cache_dir(self.cfg)
         try:
             self.choices = registry.list_choices(root)
         except Exception as exc:  # 扫描失败不该炸界面
@@ -434,8 +513,7 @@ class AsrGui:
             messagebox.showwarning("请先停止", "转写进行中，无法同时下载模型。")
             return
         endpoint = ENDPOINT_LABEL_TO_KEY.get(self.var_endpoint.get(), "mirror")
-        root_text = str(self.cfg.get("model_cache_dir") or "").strip()
-        root = Path(root_text) if root_text else app_config.discover_cache_dir()
+        root = app_config.effective_cache_dir(self.cfg)
         self.downloading = True
         self._dl_cancel.clear()
         self._log(f"开始下载：{choice.label}（来源 {ENDPOINT_LABELS.get(endpoint, endpoint)}）")
@@ -509,6 +587,7 @@ class AsrGui:
         self.cfg["endpoint"] = ENDPOINT_LABEL_TO_KEY.get(self.var_endpoint.get(), "mirror")
         self.cfg["output_dir"] = self.var_outdir.get().strip()
         self.cfg["output_name"] = self.var_name.get().strip()
+        self.cfg["source"] = self.var_source.get()
         self.cfg["last_media"] = self.var_media.get().strip()
         saved, message = app_config.save(self.cfg)
         if not saved:
@@ -521,9 +600,29 @@ class AsrGui:
             return
 
         # ---------------- 前置校验（只有这里用 messagebox） ----------------
+        source = self.var_source.get()
         media = self.var_media.get().strip()
-        if not media or not Path(media).is_file():
-            messagebox.showerror("无法开始", f"音频文件不存在：\n{media}")
+        if not media:
+            messagebox.showerror("无法开始", "请先填写或选择输入内容。")
+            return
+        if source == SOURCE_URL:
+            if not sources.is_supported_url(media):
+                messagebox.showerror(
+                    "无法开始", f"链接要以 http:// 或 https:// 开头：\n{media}"
+                )
+                return
+        elif source == SOURCE_SUB:
+            subtitle = Path(media)
+            if not subtitle.is_file():
+                messagebox.showerror("无法开始", f"字幕文件不存在：\n{media}")
+                return
+            if subtitle.suffix.lower() not in sources.SUBTITLE_SUFFIXES:
+                messagebox.showerror(
+                    "无法开始", f"只支持 .srt / .vtt 字幕文件：\n{subtitle.name}"
+                )
+                return
+        elif not Path(media).is_file():
+            messagebox.showerror("无法开始", f"音频/视频文件不存在：\n{media}")
             return
 
         name = self.var_name.get().strip()
@@ -538,45 +637,19 @@ class AsrGui:
             messagebox.showerror("无法开始", f"输出目录无法创建：\n{outdir}\n{exc}")
             return
 
-        choice = self._current_choice()
-        if choice is None:
-            messagebox.showerror("无法开始", "请先选择模型。")
+        prepared = self._prepare_engine(source)
+        if prepared is None:
             return
-        if not (choice.cached or self._manual_path(choice.model_id)):
-            messagebox.showerror(
-                "无法开始",
-                f"模型「{choice.label}」尚未缓存。\n\n请先点「下载模型」，"
-                "或用「定位/导入…」指定已下载好的模型目录。",
-            )
-            return
-
-        engine_id, sherpa_dir, whisper_dir = self._resolve_model_paths()
-        if engine_id == Transcriber.ENGINE_PARAFORMER:
-            if not sherpa_dir or not Path(sherpa_dir).is_dir():
-                messagebox.showerror("无法开始", f"sherpa 模型目录不存在：\n{sherpa_dir}")
-                return
-        else:
-            if not whisper_dir or not Path(whisper_dir).is_dir():
-                messagebox.showerror("无法开始", f"whisper 模型目录不存在：\n{whisper_dir}")
-                return
+        engine_id, sherpa_dir, whisper_dir, device, threads = prepared
 
         self._save_cfg_from_ui()
-
-        try:
-            threads = int(self.var_threads.get())
-        except (tk.TclError, ValueError):
-            threads = 8
-        threads = max(1, min(32, threads))
-
-        device = self.var_device.get().strip() or "cpu"
-        if engine_id == Transcriber.ENGINE_PARAFORMER:
-            device = "cpu"
 
         jsonl_path = outdir / f"{name}.jsonl"
         txt_path = outdir / f"{name}.txt"
 
         # ---------------- 断点续跑确认 ----------------
-        existing = read_jsonl_segments(jsonl_path) if jsonl_path.is_file() else []
+        reusable = jsonl_path.is_file() and source != SOURCE_SUB
+        existing = read_jsonl_segments(jsonl_path) if reusable else []
         mode = "fresh"
         if existing:
             resume_sec = last_end_seconds(existing)
@@ -630,19 +703,83 @@ class AsrGui:
         self.running = True
         self.progress["value"] = 0.0
         self._set_running_ui(True)
-        self._log(
-            f"开始转写：引擎={engine_id}，设备={device}，线程={threads}，"
-            f"媒体={media}"
-        )
+        if source == SOURCE_SUB:
+            worker_target = self._subtitle_worker
+            worker_args = (media, str(txt_path), str(jsonl_path))
+            self._log(f"开始解析字幕：{media}")
+        elif source == SOURCE_URL:
+            worker_target = self._url_worker
+            worker_args = (
+                media,
+                engine_id,
+                sherpa_dir,
+                whisper_dir,
+                device,
+                threads,
+                str(jsonl_path),
+            )
+            self._log(f"开始下载并转写链接：{media}")
+        else:
+            worker_target = self._worker
+            worker_args = (
+                engine_id,
+                sherpa_dir,
+                whisper_dir,
+                device,
+                threads,
+                media,
+                str(jsonl_path),
+            )
+            self._log(
+                f"开始转写：引擎={engine_id}，设备={device}，线程={threads}，媒体={media}"
+            )
         self._log(f"输出：{jsonl_path} / {txt_path}")
 
         self.worker = threading.Thread(
-            target=self._worker,
-            args=(engine_id, sherpa_dir, whisper_dir, device, threads, media, str(jsonl_path)),
+            target=worker_target,
+            args=worker_args,
             name="asr-worker",
             daemon=True,
         )
         self.worker.start()
+
+    def _prepare_engine(self, source: str):
+        """校验模型是否可用并解析引擎参数；不可用时弹窗并返回 None。"""
+        if source == SOURCE_SUB:
+            # 字幕文件直接出稿，不加载任何模型
+            return "", "", "", "cpu", 8
+
+        choice = self._current_choice()
+        if choice is None:
+            messagebox.showerror("无法开始", "请先选择模型。")
+            return None
+        if not (choice.cached or self._manual_path(choice.model_id)):
+            messagebox.showerror(
+                "无法开始",
+                f"模型「{choice.label}」尚未缓存。\n\n请先点「下载模型」，"
+                "或用「定位/导入…」指定已下载好的模型目录。",
+            )
+            return None
+
+        engine_id, sherpa_dir, whisper_dir = self._resolve_model_paths()
+        if engine_id == Transcriber.ENGINE_PARAFORMER:
+            if not sherpa_dir or not Path(sherpa_dir).is_dir():
+                messagebox.showerror("无法开始", f"sherpa 模型目录不存在：\n{sherpa_dir}")
+                return None
+        elif not whisper_dir or not Path(whisper_dir).is_dir():
+            messagebox.showerror("无法开始", f"whisper 模型目录不存在：\n{whisper_dir}")
+            return None
+
+        try:
+            threads = int(self.var_threads.get())
+        except (tk.TclError, ValueError):
+            threads = 8
+        threads = max(1, min(32, threads))
+
+        device = self.var_device.get().strip() or "cpu"
+        if engine_id == Transcriber.ENGINE_PARAFORMER:
+            device = "cpu"
+        return engine_id, sherpa_dir, whisper_dir, device, threads
 
     def _worker(
         self,
@@ -684,6 +821,76 @@ class AsrGui:
             self.q.put(("done", None))
         except CancelledError:
             self.q.put(("cancelled", None))
+        except Exception as exc:
+            self.q.put(("error", f"{exc}\n{traceback.format_exc()}"))
+
+    def _url_worker(
+        self,
+        url: str,
+        engine_id: str,
+        sherpa_dir: str,
+        whisper_dir: str,
+        device: str,
+        threads: int,
+        jsonl_path: str,
+    ) -> None:
+        """后台线程：先把链接里的音频下载到本地，再走普通转写流程。"""
+        try:
+            downloads = app_config.downloads_dir()
+            downloads.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.q.put(("error", f"下载目录无法创建：{exc}"))
+            return
+
+        self.q.put(("log", f"正在解析链接并下载音频（保存到 {downloads}）…"))
+        result = sources.download_audio(
+            url,
+            downloads,
+            progress_cb=lambda done, total, label: self.q.put(
+                ("download_progress", (done, total))
+            ),
+            cancel=self.cancel_event,
+            log=lambda message: self.q.put(("log", message)),
+        )
+        if result.cancelled:
+            self.q.put(("cancelled", None))
+            return
+        if not result.ok or result.path is None:
+            self.q.put(("error", f"下载失败：{result.error}"))
+            return
+
+        size_mb = result.path.stat().st_size / 1048576.0
+        self.q.put(("log", f"下载完成：{result.title or result.path.stem}（{size_mb:.1f} MB）"))
+        self.q.put(("log", f"音频文件：{result.path}"))
+        # 下载好的音频直接复用本地文件那条路径
+        self._worker(
+            engine_id,
+            sherpa_dir,
+            whisper_dir,
+            device,
+            threads,
+            str(result.path),
+            jsonl_path,
+        )
+
+    def _subtitle_worker(self, sub_path: str, txt_path: str, jsonl_path: str) -> None:
+        """后台线程：直接解析字幕文件，按段落推给界面（不加载任何模型）。"""
+        try:
+            self.q.put(("log", f"正在解析字幕：{sub_path}"))
+            segments = sources.parse_subtitle_file(sub_path)
+            if not segments:
+                self.q.put(("error", "字幕文件里没有解析出任何一句，请确认内容是 .srt / .vtt。"))
+                return
+            self.q.put(("log", f"共 {len(segments)} 段字幕，正在生成文本…"))
+            sources.write_jsonl(jsonl_path, segments)
+            for seg in segments:
+                if self.cancel_event.is_set():
+                    self.q.put(("cancelled", None))
+                    return
+                self.q.put(("segment", Segment(start=seg.start, end=seg.end, text=seg.text)))
+            total = segments[-1].end
+            self.q.put(("progress", (total, total, 0.0)))
+            self.q.put(("done", None))
         except Exception as exc:
             self.q.put(("error", f"{exc}\n{traceback.format_exc()}"))
 
@@ -775,6 +982,9 @@ class AsrGui:
         elif kind == "error":
             self._log(f"运行出错：\n{payload}")
             self._on_finished("运行出错")
+        elif kind == "download_progress":
+            done, total = payload
+            self._update_download_progress(done, total)
         elif kind == "model_progress":
             done, total, name = payload
             self._handle_model_progress(done, total, name)
@@ -800,6 +1010,7 @@ class AsrGui:
             state="normal" if (running and not self.downloading) else "disabled"
         )
         widgets = [
+            self.cmb_source,
             self.ent_media,
             self.btn_media,
             self.cmb_model,
@@ -856,6 +1067,22 @@ class AsrGui:
         self.var_status.set(
             f"转写中 {percent:.1f}%（{fmt_dur(done)} / {total_text}）"
         )
+
+    def _update_download_progress(self, done: float, total: float) -> None:
+        """下载阶段没有时间轴，只报字节进度，避免和转写进度混在一起。"""
+        done = float(done or 0.0)
+        total = float(total or 0.0)
+        if total > 0:
+            percent = max(0.0, min(100.0, done / total * 100.0))
+            self.progress["value"] = percent
+            detail = (
+                f"下载中 {fmt_bytes(done)} / {fmt_bytes(total)}　进度 {percent:.1f}%"
+            )
+        else:
+            self.progress["value"] = 0.0
+            detail = f"下载中 {fmt_bytes(done)}　（服务器未提供总大小）"
+        self.lbl_detail.configure(text=detail)
+        self.var_status.set("下载音频中…")
 
     # ============================================================ 文本与文件
 
@@ -954,16 +1181,27 @@ def _selftest_report() -> tuple[list[str], bool]:
     lines.append(f"Crash 日志目录：{app_config.logs_dir()}")
     lines.append(f"默认输出目录：{app_config.default_output_dir()}")
 
-    for name in ("numpy", "av", "sherpa_onnx", "ctranslate2", "tokenizers", "faster_whisper"):
+    for name in (
+        "numpy",
+        "av",
+        "sherpa_onnx",
+        "ctranslate2",
+        "tokenizers",
+        "faster_whisper",
+        "yt_dlp",
+    ):
         try:
             module = __import__(name)
-            version = getattr(module, "__version__", "?")
+            # yt-dlp 不在顶层暴露 __version__，版本在 yt_dlp.version 里。
+            version = getattr(module, "__version__", None)
+            if version is None:
+                version = getattr(getattr(module, "version", None), "__version__", "?")
             lines.append(f"依赖 {name}：OK ({version})")
         except Exception as exc:  # noqa: BLE001 - 自检要把任何异常都报出来
             failed = True
             lines.append(f"依赖 {name}：失败 -> {exc.__class__.__name__}: {exc}")
 
-    root = Path(str(app_config.load().get("model_cache_dir") or app_config.discover_cache_dir()))
+    root = app_config.effective_cache_dir(app_config.load())
     lines.append(f"模型缓存目录：{root}")
     try:
         for choice in registry.list_choices(root):
@@ -1010,8 +1248,50 @@ def _run_selftest(target: Path, interactive: bool) -> int:
     return 2 if failed else 0
 
 
-def _run_headless(media: Path, out_txt: Path, model_id: str, device: str, threads: int) -> int:
-    """命令行转写（不弹窗）：给批处理/服务器/自动化用，也方便打包后做端到端验证。"""
+def _resolve_source(source: str, log) -> "Path | None":
+    """把命令行来源解析成本地媒体文件：URL 先下音频，其余当本地路径。"""
+    if sources.is_supported_url(source):
+        log(f"下载音频：{source}")
+        result = sources.download_audio(source, app_config.downloads_dir(), log=log)
+        if not result.ok or result.path is None:
+            log(f"下载失败：{result.error}")
+            return None
+        size_mb = result.path.stat().st_size / 1048576
+        log(f"下载完成：{result.title}（{size_mb:.1f} MB）-> {result.path}")
+        return result.path
+    media = Path(source)
+    if not media.is_file():
+        log(f"找不到文件：{media}")
+        return None
+    return media
+
+
+def _run_subtitle_cli(path: Path, out_txt: Path, log) -> int:
+    """字幕文件直接出稿（不用模型）。"""
+    try:
+        segments = sources.parse_subtitle_file(path)
+    except Exception as exc:  # noqa: BLE001 - 命令行模式把异常写进日志
+        log(f"失败：{exc.__class__.__name__}: {exc}")
+        return 1
+    if not segments:
+        log("字幕文件里没有解析出任何一句（需要 .srt / .vtt 内容）。")
+        return 1
+    jsonl_path = out_txt.with_suffix(".jsonl")
+    sources.write_jsonl(jsonl_path, segments)
+    out_txt.parent.mkdir(parents=True, exist_ok=True)
+    with out_txt.open("w", encoding="utf-8") as handle:
+        for segment in segments:
+            handle.write(f"[{format_timestamp(segment.start)}] {segment.text}\n")
+    log(f"完成：{len(segments)} 段 -> {out_txt}")
+    return 0
+
+
+def _run_headless(source: str, out_txt: Path, model_id: str, device: str, threads: int) -> int:
+    """命令行转写（不弹窗）：给批处理/服务器/自动化用，也方便打包后做端到端验证。
+
+    ``source`` 可以是本地音频/视频文件、视频页链接（自动下音频），或 ``.srt`` / ``.vtt``
+    字幕文件（直接出稿，不需要模型）。
+    """
     log_path = out_txt.with_suffix(".log")
     lines: list[str] = []
 
@@ -1024,20 +1304,32 @@ def _run_headless(media: Path, out_txt: Path, model_id: str, device: str, thread
             pass
 
     try:
-        choice = registry.choice_by_id(model_id)
+        is_subtitle = source.lower().endswith(sources.SUBTITLE_SUFFIXES)
+        if is_subtitle and not sources.is_supported_url(source):
+            return _run_subtitle_cli(Path(source), out_txt, log)
+        media = _resolve_source(source, log)
+        if media is None:
+            return 1
+        cfg = app_config.load()
+        cache_root = app_config.effective_cache_dir(cfg)
+        choice = registry.choice_by_id(model_id, cache_root)
         if choice is None:
             log(f"未知模型：{model_id}")
             return 2
+        # 手动导入的目录优先（与界面里「定位/导入…」写入的值一致）。
+        manual = cfg.get("manual_models") or {}
+        manual_path = manual.get(model_id) if isinstance(manual, dict) else None
+        location = Path(manual_path) if manual_path else Path(choice.location or "")
         if choice.kind == "sherpa":
             engine_id = Transcriber.ENGINE_PARAFORMER
-            sherpa_dir = Path(choice.location or "")
+            sherpa_dir = location
             whisper_dir = Path()
             device = "cpu"  # paraformer 只能 CPU
         else:
             engine_id = Transcriber.ENGINE_BASE
             sherpa_dir = Path()
-            whisper_dir = Path(choice.location or "")
-        log(f"模型={choice.label}  文件={whisper_dir or sherpa_dir}  设备={device}  线程={threads}")
+            whisper_dir = location
+        log(f"模型={choice.label}  文件={location}  设备={device}  线程={threads}")
         transcriber = Transcriber(
             engine_id,
             sherpa_dir=sherpa_dir,
@@ -1097,9 +1389,9 @@ def main() -> None:
         index = argv.index("--transcribe")
         rest = argv[index + 1 :]
         if not rest:
-            print("用法：--transcribe <媒体文件> [--out <文本文件>] [--model <模型id>] …")
+            print("用法：--transcribe <本地文件|视频链接|.srt|.vtt> [--out <文本>] …")
             raise SystemExit(2)
-        media = Path(rest[0])
+        source = rest[0]
         cfg = app_config.load()
         model_id = cfg.get("model_id") or registry.PARAFORMER_ID
         device = str(cfg.get("device") or "cpu")
@@ -1119,10 +1411,12 @@ def main() -> None:
             elif flag == "--threads":
                 threads = max(1, min(32, int(value or threads)))
             position += 2
-        out_txt = Path(out_arg) if out_arg else Path(str(cfg.get("output_dir"))) / (
-            media.stem + ".txt"
-        )
-        raise SystemExit(_run_headless(media, out_txt, str(model_id), device, threads))
+        if out_arg:
+            out_txt = Path(out_arg)
+        else:
+            stem = "transcript" if sources.is_supported_url(source) else Path(source).stem
+            out_txt = Path(str(cfg.get("output_dir"))) / ((stem or "transcript") + ".txt")
+        raise SystemExit(_run_headless(source, out_txt, str(model_id), device, threads))
 
     _install_excepthooks()
     root = tk.Tk()
