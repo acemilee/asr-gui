@@ -12,6 +12,8 @@
 
 ![GUI](asr_gui/GUI界面.png)
 
+![视频链接](asr_gui/GUI视频链接.png)
+
 ![模型下拉](asr_gui/GUI模型下拉.png)
 
 ## 为什么做这个
@@ -25,12 +27,10 @@
 
 - **三种输入来源**——「视频链接」直接粘贴 B 站 / 抖音 / YouTube 页面链接，程序只把音频轨下下来
   （不转码、不碰画面），再交给转写引擎；「本地文件」选硬盘上的音频或视频；「字幕文件」直接吃
-  `.srt` / `.vtt`，不加载模型、几乎瞬间出稿。链接下载走 [yt-dlp](https://github.com/yt-dlp/yt-dlp)，
-  默认只取第一个分 P，避免一次拖几个小时。
-- **三种输入来源**——「视频链接」直接粘贴 B 站 / 抖音 / YouTube 页面链接，程序只把音频轨下下来
-  （不转码、不碰画面），再交给转写引擎；「本地文件」选硬盘上的音频或视频；「字幕文件」直接吃
-  `.srt` / `.vtt`，不加载模型、几乎瞬间出稿。链接下载走 [yt-dlp](https://github.com/yt-dlp/yt-dlp)，
-  默认只取第一个分 P，避免一次拖几个小时。
+  `.srt` / `.vtt`，不加载模型、几乎瞬间出稿。链接下载走 [yt-dlp](https://github.com/yt-dlp/yt-dlp)。
+- **B 站三件套**——①**AI 字幕优先**：有字幕轨就直接出稿，秒级完成、完全不占模型；②**分 P 选择**：
+  `分 P` 填 `1,3-5`（留空是全部），时间轴按分 P 顺序自动累加后合并成一份 txt；③**登录态**：可从
+  Chrome / Edge / Firefox 读 cookie（拿 AI 字幕通常需要登录），读不到就回落语音转写。
 - **下拉里 8 档模型**——从 `tiny`（约 75 MB，几乎瞬秒）到 `large-v3`（约 3.1 GB），外加为中文调过的
   `paraformer-zh`。每档直接显示 `已缓存` 或 `未缓存·需下载 ~XXX MB`。
 - **下载默认走镜像**——默认 `https://hf-mirror.com`，界面里可切回 `https://huggingface.co`。走的是
@@ -50,10 +50,6 @@
   异常会写进 `logs/error-<日期>.log`，不弹一个英文 traceback 就消失。
 
 ## 快速开始
-
-运行依赖（`pip install -r requirements.txt`）：`sherpa-onnx`（paraformer-zh / VAD / 标点）、
-`faster-whisper` + `ctranslate2`（whisper 各档）、`av`（PyAV，流式解码长视频）、`numpy`，以及
-`yt-dlp`（只用于「视频链接」来源；不用链接可以不管它）。
 
 运行依赖（`pip install -r requirements.txt`）：`sherpa-onnx`（paraformer-zh / VAD / 标点）、
 `faster-whisper` + `ctranslate2`（whisper 各档）、`av`（PyAV，流式解码长视频）、`numpy`，以及
@@ -128,7 +124,7 @@ python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 
 | 来源 | 你给它什么 | 它做什么 | 需要模型吗 |
 | --- | --- | --- | --- |
-| 视频链接 | 页面 URL（`https://…`），点「粘贴」可直接读剪贴板 | 用 yt-dlp 只下音频轨到 `<程序目录>/downloads`（exe 版是 `%APPDATA%\asr-gui\downloads`），再照常分块转写 | 需要 |
+| 视频链接 | 页面 URL（`https://…`），点「粘贴」可直接读剪贴板 | B 站先查 AI 字幕（有就秒级出稿、跳过下载与转写）；没有字幕或非 B 站才用 yt-dlp 只下音频轨到 `<程序目录>/downloads`（exe 版是 `%APPDATA%\asr-gui\downloads`），再照常分块转写 | 取决于有没有字幕 |
 | 本地文件 | 音频或视频文件的路径 | 直接解码转写，常见容器都行 | 需要 |
 | 字幕文件 | `.srt` / `.vtt` 文件 | 解析时间轴与正文，立刻写 txt + jsonl | **不需要** |
 
@@ -136,19 +132,15 @@ python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 PyAV 本来就能直接解 `m4a` / `webm`，多一道 ffmpeg 反而更容易出问题。下载中途点「停止」，
 yt-dlp 会被打断，已下载的 `.part` 片段留在 `downloads` 里，下次自动续传。
 
-## 三种输入来源
+**B 站细节**：先调 `x/web-interface/view`（风控时退 `x/player/pagelist`）列出所有分 P，再用
+`x/player/wbi/v2`（带 wbi 签名）查每个 P 的 AI 字幕轨；多分 P 时每 P 单独下载（`?p=N`），先写
+`<名字>.p1.jsonl`、`<名字>.p2.jsonl`，全部结束后按时间轴合并成一份 `<名字>.txt`。AI 字幕需要
+登录态，未登录时接口返回空、自动回落语音转写——日志里会写「没有可用的 B 站字幕轨，改走语音转写。」
 
-界面最上面的「来源」下拉框决定这一轮吃什么：
+看到的界面就是上面第三张图：选「视频链接」，贴 B 站地址，`分 P` 填 `1,3-5`、`登录态` 选 Chrome（拿 AI 字幕需要），点「开始转写」。
 
-| 来源 | 你给它什么 | 它做什么 | 需要模型吗 |
-| --- | --- | --- | --- |
-| 视频链接 | 页面 URL（`https://…`），点「粘贴」可直接读剪贴板 | 用 yt-dlp 只下音频轨到 `<程序目录>/downloads`（exe 版是 `%APPDATA%\asr-gui\downloads`），再照常分块转写 | 需要 |
-| 本地文件 | 音频或视频文件的路径 | 直接解码转写，常见容器都行 | 需要 |
-| 字幕文件 | `.srt` / `.vtt` 文件 | 解析时间轴与正文，立刻写 txt + jsonl | **不需要** |
-
-链接下载是有意做成「只下音频」的：B 站等站的视频轨动辄上 GB，而转写只需要音轨；不转码是因为
-PyAV 本来就能直接解 `m4a` / `webm`，多一道 ffmpeg 反而更容易出问题。下载中途点「停止」，
-yt-dlp 会被打断，已下载的 `.part` 片段留在 `downloads` 里，下次自动续传。
+命令行同样支持：`--pages 1,3-5`、`--cookies-from-browser chrome`、`--cookies cookies.txt`
+（Netscape 格式）、`--no-subtitle-first`（故意跳过字幕、强制走语音）。
 
 ## 模型
 

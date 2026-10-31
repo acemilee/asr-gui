@@ -37,6 +37,7 @@ from engine import CancelledError, Segment, Transcriber, format_timestamp
 import config as app_config
 import downloader
 import models_registry as registry
+import pipeline
 import sources
 
 # 引擎分块长度（秒），与 engine 默认一致
@@ -124,14 +125,38 @@ def last_end_seconds(segments: list[Segment]) -> float:
     return max((s.end for s in segments), default=0.0)
 
 
+def _read_jsonl_triples(path: Path) -> list[tuple[float, float, str]]:
+    """读 ``{"start","end","text"}`` 形式的分段文件；缺文件/坏行都跳过。"""
+    rows: list[tuple[float, float, str]] = []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                    start = float(item.get("start") or 0.0)
+                    end = float(item.get("end") or start)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    rows.append((start, end, text))
+    except OSError:
+        return rows
+    rows.sort(key=lambda row: row[0])
+    return rows
+
+
 class AsrGui:
     """主窗口逻辑。"""
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(f"本地 ASR 长视频转写 v{app_config.APP_VERSION}")
-        self.root.geometry("1120x780")
-        self.root.minsize(960, 640)
+        self.root.geometry("1120x980")
+        self.root.minsize(960, 720)
         try:
             self.root.option_add("*Font", ("Microsoft YaHei UI", 9))
         except tk.TclError:  # 某些环境没有该字体，忽略即可
@@ -147,6 +172,13 @@ class AsrGui:
         self.txt_handle = None        # 输出 txt 文件句柄（只在主线程使用）
         self.resume_base = 0.0        # 本次续跑的起点（秒）
         self.total_seconds = 0.0      # 媒体总时长（秒）
+        self._grand_total = 0.0       # 链接模式：所有分 P 加起来的时长
+        self._engine_args: tuple | None = None   # 后台线程里构造引擎用
+        self._transcriber = None      # 懒加载，多分 P 只加载一次模型
+        self._page_offsets: list[tuple[int, float]] = []  # [(分 P 号, 时间轴偏移)]
+        self._txt_path: Path | None = None
+        self._jsonl_path: Path | None = None
+        self._cookies_cache: dict[str, str] | None = None
 
         # ---- 配置：首次运行自动生成，源码里不再写死任何本机路径 ----
         self.cfg = app_config.load()
@@ -180,6 +212,13 @@ class AsrGui:
             value=str(self.cfg.get("output_dir") or app_config.default_output_dir())
         )
         self.var_name = tk.StringVar(value=str(self.cfg.get("output_name") or "transcript"))
+        self.var_pages = tk.StringVar(value=str(self.cfg.get("pages") or ""))
+        self.var_cookies = tk.StringVar(
+            value=sources.COOKIE_BROWSER_LABELS.get(
+                str(self.cfg.get("cookies_from_browser") or ""),
+                sources.COOKIE_BROWSER_LABELS[""],
+            )
+        )
         self.var_status = tk.StringVar(value="就绪")
         self.var_hint = tk.StringVar(value="")
 
@@ -247,8 +286,29 @@ class AsrGui:
         )
         self.spin_threads.grid(row=3, column=3, sticky="w", pady=(8, 0))
 
+        # 仅在「视频链接」来源下出现的两项：分 P 范围与浏览器登录态
+        self.lbl_pages = ttk.Label(f1, text="分 P：")
+        self.lbl_pages.grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.ent_pages = ttk.Entry(f1, textvariable=self.var_pages, width=16)
+        self.ent_pages.grid(row=4, column=1, sticky="w", pady=(8, 0))
+        self.lbl_pages_hint = ttk.Label(
+            f1, text="留空 = 全部；例：1,3-5", foreground="#666666"
+        )
+        self.lbl_pages_hint.grid(row=4, column=2, sticky="w", padx=(6, 0), pady=(8, 0))
+
+        self.lbl_cookies = ttk.Label(f1, text="登录态：")
+        self.lbl_cookies.grid(row=4, column=3, sticky="e", pady=(8, 0))
+        self.cmb_cookies = ttk.Combobox(
+            f1,
+            textvariable=self.var_cookies,
+            values=[label for _key, label in sources.COOKIE_BROWSERS],
+            state="readonly",
+            width=10,
+        )
+        self.cmb_cookies.grid(row=4, column=4, sticky="w", padx=(6, 0), pady=(8, 0))
+
         ttk.Label(f1, textvariable=self.var_hint, foreground="#8a6d3b").grid(
-            row=4, column=0, columnspan=5, sticky="w", pady=(6, 0)
+            row=5, column=0, columnspan=5, sticky="w", pady=(6, 0)
         )
 
         # ---------------------------------------------------- 模型文件与下载
@@ -332,11 +392,11 @@ class AsrGui:
         pane.add(right, weight=2)
 
         self.txt_log = ScrolledText(
-            left, wrap="word", width=30, height=12, state="disabled"
+            left, wrap="word", width=30, height=8, state="disabled"
         )
         self.txt_log.pack(fill="both", expand=True)
         self.txt_preview = ScrolledText(
-            right, wrap="word", width=40, height=12, state="disabled"
+            right, wrap="word", width=40, height=8, state="disabled"
         )
         self.txt_preview.pack(fill="both", expand=True)
 
@@ -377,11 +437,27 @@ class AsrGui:
             self.var_media_label.set("音频/视频：")
             self.btn_media.configure(text="浏览…", state="normal")
         self.var_source_hint.set(SOURCE_HINTS.get(source, ""))
+        self._apply_url_widgets(source == SOURCE_URL)
         if source == SOURCE_SUB:
             self.var_hint.set("提示：字幕文件直接出稿，模型与设备设置不参与。")
         else:
             self.var_hint.set("")
             self._apply_model_state()
+
+    def _apply_url_widgets(self, visible: bool) -> None:
+        """分 P / 登录态 只在「视频链接」来源下显示（其他来源用不上）。"""
+        widgets = (
+            self.lbl_pages,
+            self.ent_pages,
+            self.lbl_pages_hint,
+            self.lbl_cookies,
+            self.cmb_cookies,
+        )
+        for widget in widgets:
+            if visible:
+                widget.grid()
+            else:
+                widget.grid_remove()
 
     def _browse_dir(self, var: tk.StringVar) -> None:
         path = filedialog.askdirectory(title="选择目录")
@@ -589,6 +665,8 @@ class AsrGui:
         self.cfg["output_name"] = self.var_name.get().strip()
         self.cfg["source"] = self.var_source.get()
         self.cfg["last_media"] = self.var_media.get().strip()
+        self.cfg["pages"] = self.var_pages.get().strip()
+        self.cfg["cookies_from_browser"] = self._cookies_key()
         saved, message = app_config.save(self.cfg)
         if not saved:
             self._log(f"配置保存失败：{message}")
@@ -697,6 +775,9 @@ class AsrGui:
 
         self.resume_base = last_end_seconds(segments) if mode == "resume" else 0.0
         self.total_seconds = 0.0
+        self._txt_path = txt_path
+        self._jsonl_path = jsonl_path
+        self._page_offsets = []
 
         # ---------------- 启动后台线程 ----------------
         self.cancel_event.clear()
@@ -709,6 +790,7 @@ class AsrGui:
             self._log(f"开始解析字幕：{media}")
         elif source == SOURCE_URL:
             worker_target = self._url_worker
+            # Tk 变量只能在主线程读，所以先把分 P / 登录态取出来再交给后台线程
             worker_args = (
                 media,
                 engine_id,
@@ -717,6 +799,8 @@ class AsrGui:
                 device,
                 threads,
                 str(jsonl_path),
+                self.var_pages.get().strip(),
+                self._cookies_key(),
             )
             self._log(f"开始下载并转写链接：{media}")
         else:
@@ -781,6 +865,60 @@ class AsrGui:
             device = "cpu"
         return engine_id, sherpa_dir, whisper_dir, device, threads
 
+    def _ensure_transcriber(self):
+        """懒加载引擎：链接模式多个分 P 共用同一个模型实例，避免反复加载。"""
+        if self._transcriber is not None:
+            return self._transcriber
+        if self._engine_args is None:
+            self.q.put(("error", "内部错误：引擎参数没有初始化。"))
+            return None
+        engine_id, sherpa_dir, whisper_dir, device, threads = self._engine_args
+        transcriber = Transcriber(
+            engine=engine_id,
+            sherpa_dir=sherpa_dir,
+            whisper_dir=whisper_dir,
+            device=device,
+            num_threads=threads,
+        )
+        self.q.put(("log", f"正在加载模型（{engine_id}）…"))
+        try:
+            transcriber.load()
+        except Exception as exc:  # 加载失败：属于"启动前"阶段，允许弹窗
+            self.q.put(("load_error", str(exc)))
+            return None
+        self._transcriber = transcriber
+        self.q.put(("log", "模型加载完成。"))
+        return transcriber
+
+    def _transcribe_media(self, media: Path, jsonl_path: Path, offset: float) -> bool:
+        """转写一个媒体文件（pipeline 注入的回调）：段落按 ``offset`` 平移到总时间轴。"""
+        transcriber = self._ensure_transcriber()
+        if transcriber is None:
+            return False
+        try:
+            transcriber.run(
+                media_path=str(media),
+                output_jsonl=str(jsonl_path),
+                chunk_seconds=CHUNK_SECONDS,
+                progress_cb=lambda done, total, elapsed: self.q.put(
+                    ("progress", (offset + done, self._grand_total or total, elapsed))
+                ),
+                segment_cb=lambda seg: self.q.put(
+                    (
+                        "segment",
+                        Segment(start=seg.start + offset, end=seg.end + offset, text=seg.text),
+                    )
+                ),
+                cancel=self.cancel_event,
+            )
+            return True
+        except CancelledError:
+            self.q.put(("cancelled", None))
+            return False
+        except Exception as exc:
+            self.q.put(("error", f"{exc}\n{traceback.format_exc()}"))
+            return False
+
     def _worker(
         self,
         engine_id: str,
@@ -791,23 +929,14 @@ class AsrGui:
         media: str,
         jsonl_path: str,
     ) -> None:
-        """后台线程：只做引擎相关的事，绝不碰 tkinter 控件。"""
+        """后台线程（本地文件）：只做引擎相关的事，绝不碰 tkinter 控件。"""
         try:
-            transcriber = Transcriber(
-                engine=engine_id,
-                sherpa_dir=sherpa_dir,
-                whisper_dir=whisper_dir,
-                device=device,
-                num_threads=threads,
-            )
-            try:
-                self.q.put(("log", f"正在加载模型（{engine_id}）…"))
-                transcriber.load()
-            except Exception as exc:  # 加载失败：属于"启动前"阶段，允许弹窗
-                self.q.put(("load_error", str(exc)))
+            self._engine_args = (engine_id, sherpa_dir, whisper_dir, device, threads)
+            self._transcriber = None
+            if self._ensure_transcriber() is None:
                 return
-            self.q.put(("log", "模型加载完成，开始转写…"))
-
+            transcriber = self._transcriber
+            self.q.put(("log", "开始转写…"))
             transcriber.run(
                 media_path=media,
                 output_jsonl=jsonl_path,
@@ -824,6 +953,26 @@ class AsrGui:
         except Exception as exc:
             self.q.put(("error", f"{exc}\n{traceback.format_exc()}"))
 
+    def _cookies_key(self) -> str:
+        """把「登录态」下拉的文案反查回 yt-dlp 的浏览器代号（空串 = 不使用）。"""
+        label = self.var_cookies.get().strip()
+        for key, text in sources.COOKIE_BROWSERS:
+            if text == label:
+                return key
+        return ""
+
+    def _emit_segments(self, segments, offset: float) -> None:
+        """把整段字幕按 ``offset`` 平移后推给界面（pipeline 注入的回调）。"""
+        for seg in segments:
+            if self.cancel_event.is_set():
+                return
+            self.q.put(
+                (
+                    "segment",
+                    Segment(start=seg.start + offset, end=seg.end + offset, text=seg.text),
+                )
+            )
+
     def _url_worker(
         self,
         url: str,
@@ -833,8 +982,12 @@ class AsrGui:
         device: str,
         threads: int,
         jsonl_path: str,
+        pages_spec: str = "",
+        cookies_key: str = "",
     ) -> None:
-        """后台线程：先把链接里的音频下载到本地，再走普通转写流程。"""
+        """后台线程：视频链接 → 分 P 拆解 → 字幕优先，缺字幕的才下载音频转写。"""
+        transcript_dir = Path(jsonl_path).parent
+        stem = Path(jsonl_path).stem
         try:
             downloads = app_config.downloads_dir()
             downloads.mkdir(parents=True, exist_ok=True)
@@ -842,36 +995,54 @@ class AsrGui:
             self.q.put(("error", f"下载目录无法创建：{exc}"))
             return
 
-        self.q.put(("log", f"正在解析链接并下载音频（保存到 {downloads}）…"))
-        result = sources.download_audio(
-            url,
-            downloads,
-            progress_cb=lambda done, total, label: self.q.put(
-                ("download_progress", (done, total))
-            ),
-            cancel=self.cancel_event,
-            log=lambda message: self.q.put(("log", message)),
+        self._engine_args = (engine_id, sherpa_dir, whisper_dir, device, threads)
+        self._transcriber = None
+        self._grand_total = 0.0
+        self._page_offsets = []
+        self.q.put(("log", f"下载目录：{downloads}"))
+
+        cookies = sources.browser_cookies(
+            cookies_key, log=lambda message: self.q.put(("log", message))
         )
-        if result.cancelled:
-            self.q.put(("cancelled", None))
-            return
-        if not result.ok or result.path is None:
-            self.q.put(("error", f"下载失败：{result.error}"))
+
+        def on_progress(done: float, total: float, label: str) -> None:
+            self._grand_total = float(total or 0.0)
+            self.q.put(("progress", (done, total, 0.0)))
+            if label:
+                self.q.put(("phase", f"处理中：{label}"))
+
+        try:
+            result = pipeline.run_url_pipeline(
+                url,
+                transcript_dir=transcript_dir,
+                stem=stem,
+                downloads_dir=downloads,
+                transcribe=self._transcribe_media,
+                emit_segments=self._emit_segments,
+                cookies=cookies,
+                pages_spec=pages_spec,
+                subtitle_first=True,
+                log=lambda message: self.q.put(("log", message)),
+                progress=on_progress,
+                download_progress=lambda done, total, label: self.q.put(
+                    ("download_progress", (done, total))
+                ),
+                cancel=self.cancel_event,
+            )
+        except Exception as exc:
+            self.q.put(("error", f"{exc}\n{traceback.format_exc()}"))
             return
 
-        size_mb = result.path.stat().st_size / 1048576.0
-        self.q.put(("log", f"下载完成：{result.title or result.path.stem}（{size_mb:.1f} MB）"))
-        self.q.put(("log", f"音频文件：{result.path}"))
-        # 下载好的音频直接复用本地文件那条路径
-        self._worker(
-            engine_id,
-            sherpa_dir,
-            whisper_dir,
-            device,
-            threads,
-            str(result.path),
-            jsonl_path,
-        )
+        if result.cancelled or self.cancel_event.is_set():
+            self.q.put(("cancelled", None))
+            return
+        if not result.ok:
+            self.q.put(("error", result.error or "下载或转写失败。"))
+            return
+        self._page_offsets = list(result.page_offsets)
+        if result.subtitle_pages:
+            self.q.put(("log", f"{result.subtitle_pages} 个分 P 直接用 B 站字幕出稿，未占用模型。"))
+        self.q.put(("done", None))
 
     def _subtitle_worker(self, sub_path: str, txt_path: str, jsonl_path: str) -> None:
         """后台线程：直接解析字幕文件，按段落推给界面（不加载任何模型）。"""
@@ -985,6 +1156,8 @@ class AsrGui:
         elif kind == "download_progress":
             done, total = payload
             self._update_download_progress(done, total)
+        elif kind == "phase":
+            self.var_status.set(str(payload))
         elif kind == "model_progress":
             done, total, name = payload
             self._handle_model_progress(done, total, name)
@@ -999,9 +1172,49 @@ class AsrGui:
         self._close_txt()
         if state == "转写完成":
             self.progress["value"] = 100.0
+            self._rebuild_txt()
             self._log("转写完成。")
         else:
             self._log(f"任务结束：{state}")
+
+    def _rebuild_txt(self) -> None:
+        """按分 P 顺序把分段 jsonl 合并成一份完整 txt（链接模式的关键收尾）。
+
+        只有单个媒体文件时，jsonl 里的时间轴已经是全局的，直接读那份即可；
+        多分 P 时每个 P 各有一份 ``<名字>.p{N}.jsonl``（时间是 P 内的），
+        这里用 pipeline 返回的偏移表把它们接回同一条时间轴。
+        """
+        if self._txt_path is None or self._jsonl_path is None:
+            return
+        rows: list[tuple[float, float, str]] = []
+        sources_paths: list[tuple[Path, float]] = []
+        if self._page_offsets:
+            for page, offset in self._page_offsets:
+                sources_paths.append(
+                    (self._jsonl_path.parent / f"{self._jsonl_path.stem}.p{page}.jsonl", offset)
+                )
+        else:
+            sources_paths.append((self._jsonl_path, 0.0))
+        for path, offset in sources_paths:
+            for start, end, text in _read_jsonl_triples(path):
+                rows.append((start + offset, end + offset, text))
+        if not rows:
+            return
+        rows.sort(key=lambda row: row[0])
+        try:
+            with open(self._txt_path, "w", encoding="utf-8") as handle:
+                for start, _end, text in rows:
+                    handle.write(f"[{format_timestamp(start)}] {text}\n")
+        except OSError as exc:
+            self._log(f"合并 txt 失败：{exc}")
+            return
+        self._clear_widget(self.txt_preview)
+        for start, _end, text in rows:
+            self._append_widget(
+                self.txt_preview,
+                f"[{format_timestamp(start)}] {text}\n",
+            )
+        self._log(f"已按时间轴重建完整文本：{self._txt_path}（{len(rows)} 段）")
 
     def _set_running_ui(self, running: bool) -> None:
         """忙碌（转写或下载）期间禁用输入类控件，避免运行中被改动。"""
@@ -1024,6 +1237,8 @@ class AsrGui:
             self.ent_outdir,
             self.btn_outdir,
             self.ent_name,
+            self.ent_pages,
+            self.cmb_cookies,
         ]
         for widget in widgets:
             widget.configure(state="disabled" if running else "normal")
@@ -1031,6 +1246,7 @@ class AsrGui:
             # Combobox 恢复只读；设备下拉的可用性再按模型类型修正
             self.cmb_model.configure(state="readonly")
             self.cmb_endpoint.configure(state="readonly")
+            self.cmb_cookies.configure(state="readonly")
             self.ent_model_path.configure(state="readonly")
             self._apply_model_state()
 
@@ -1286,11 +1502,146 @@ def _run_subtitle_cli(path: Path, out_txt: Path, log) -> int:
     return 0
 
 
-def _run_headless(source: str, out_txt: Path, model_id: str, device: str, threads: int) -> int:
+def _load_model_for_cli(model_id: str, device: str, threads: int, log) -> "Transcriber | None":
+    """按模型 id 解析目录并加载引擎；返回 None 表示失败（原因已写日志）。"""
+    cfg = app_config.load()
+    cache_root = app_config.effective_cache_dir(cfg)
+    choice = registry.choice_by_id(model_id, cache_root)
+    if choice is None:
+        log(f"未知模型：{model_id}")
+        return None
+    # 手动导入的目录优先（与界面里「定位/导入…」写入的值一致）。
+    manual = cfg.get("manual_models") or {}
+    manual_path = manual.get(model_id) if isinstance(manual, dict) else None
+    location = Path(manual_path) if manual_path else Path(choice.location or "")
+    if choice.kind == "sherpa":
+        engine_id = Transcriber.ENGINE_PARAFORMER
+        sherpa_dir, whisper_dir = location, Path()
+        device = "cpu"  # paraformer 只能 CPU
+    else:
+        engine_id = Transcriber.ENGINE_BASE
+        sherpa_dir, whisper_dir = Path(), location
+    log(f"模型={choice.label}  文件={location}  设备={device}  线程={threads}")
+    transcriber = Transcriber(
+        engine_id,
+        sherpa_dir=sherpa_dir,
+        whisper_dir=whisper_dir,
+        device=device,
+        num_threads=threads,
+    )
+    transcriber.load()
+    return transcriber
+
+
+def _write_rows(out_txt: Path, rows: list[tuple[float, float, str]]) -> None:
+    """按时间轴顺序写出人读版 txt。"""
+    out_txt.parent.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(rows, key=lambda row: row[0])
+    with out_txt.open("w", encoding="utf-8") as handle:
+        for start, _end, text in ordered:
+            handle.write(f"[{format_timestamp(start)}] {text}\n")
+
+
+def _run_url_cli(
+    url: str,
+    out_txt: Path,
+    model_id: str,
+    device: str,
+    threads: int,
+    pages: str,
+    cookies_browser: str,
+    cookiefile: str,
+    subtitle_first: bool,
+    log,
+) -> int:
+    """命令行：视频链接 → 分 P / 字幕优先 / 语音兜底，最后写一份完整 txt。"""
+    downloads = app_config.downloads_dir()
+    downloads.mkdir(parents=True, exist_ok=True)
+    log(f"下载目录：{downloads}")
+
+    cookies: dict[str, str] = {}
+    if cookies_browser:
+        cookies = sources.browser_cookies(cookies_browser, log=log)
+    elif cookiefile:
+        cookies = sources.load_cookie_file(cookiefile)
+        log(f"已读取 cookie 文件：{len(cookies)} 个")
+    elif not cookies:
+        log("未使用登录态；B 站 AI 字幕通常需要登录态，拿不到会回退语音转写。")
+
+    rows: list[tuple[float, float, str]] = []
+    holder: dict = {"transcriber": None}
+
+    def get_transcriber():
+        if holder["transcriber"] is None:
+            holder["transcriber"] = _load_model_for_cli(model_id, device, threads, log)
+            if holder["transcriber"] is not None:
+                log("模型已加载")
+        return holder["transcriber"]
+
+    def transcribe(media: Path, jsonl_path: Path, offset: float) -> bool:
+        transcriber = get_transcriber()
+        if transcriber is None:
+            return False
+        transcriber.run(
+            str(media),
+            str(jsonl_path),
+            chunk_seconds=CHUNK_SECONDS,
+            progress_cb=lambda done, total, elapsed: log(
+                f"进度 {(done / total * 100) if total else 0:5.1f}%"
+                f"  {format_timestamp(done)} / {format_timestamp(total)}"
+            ),
+        )
+        for start, end, text in _read_jsonl_triples(jsonl_path):
+            rows.append((start + offset, end + offset, text))
+        return True
+
+    def emit_segments(segments, offset: float) -> None:
+        for seg in segments:
+            rows.append((seg.start + offset, seg.end + offset, seg.text))
+
+    result = pipeline.run_url_pipeline(
+        url,
+        transcript_dir=out_txt.parent,
+        stem=out_txt.stem,
+        downloads_dir=downloads,
+        transcribe=transcribe,
+        emit_segments=emit_segments,
+        cookies=cookies,
+        pages_spec=pages,
+        subtitle_first=subtitle_first,
+        cookies_from_browser=cookies_browser,
+        cookiefile=cookiefile,
+        log=log,
+    )
+    if result.cancelled:
+        log("已取消")
+        return 130
+    if not result.ok:
+        log(f"失败：{result.error}")
+        return 1
+    _write_rows(out_txt, rows)
+    log(
+        f"完成：{len(rows)} 段 -> {out_txt}"
+        f"（{result.pages_done} 个分 P，其中 {result.subtitle_pages} 个直接用字幕）"
+    )
+    return 0
+
+
+def _run_headless(
+    source: str,
+    out_txt: Path,
+    model_id: str,
+    device: str,
+    threads: int,
+    pages: str = "",
+    cookies_browser: str = "",
+    cookiefile: str = "",
+    subtitle_first: bool = True,
+) -> int:
     """命令行转写（不弹窗）：给批处理/服务器/自动化用，也方便打包后做端到端验证。
 
-    ``source`` 可以是本地音频/视频文件、视频页链接（自动下音频），或 ``.srt`` / ``.vtt``
-    字幕文件（直接出稿，不需要模型）。
+    ``source`` 可以是本地音频/视频文件、视频页链接（自动下音频，可指定分 P 与登录态），
+    或 ``.srt`` / ``.vtt`` 字幕文件（直接出稿，不需要模型）。
     """
     log_path = out_txt.with_suffix(".log")
     lines: list[str] = []
@@ -1307,60 +1658,39 @@ def _run_headless(source: str, out_txt: Path, model_id: str, device: str, thread
         is_subtitle = source.lower().endswith(sources.SUBTITLE_SUFFIXES)
         if is_subtitle and not sources.is_supported_url(source):
             return _run_subtitle_cli(Path(source), out_txt, log)
-        media = _resolve_source(source, log)
-        if media is None:
-            return 1
-        cfg = app_config.load()
-        cache_root = app_config.effective_cache_dir(cfg)
-        choice = registry.choice_by_id(model_id, cache_root)
-        if choice is None:
-            log(f"未知模型：{model_id}")
+        if sources.is_supported_url(source):
+            return _run_url_cli(
+                source,
+                out_txt,
+                model_id,
+                device,
+                threads,
+                pages,
+                cookies_browser,
+                cookiefile,
+                subtitle_first,
+                log,
+            )
+
+        transcriber = _load_model_for_cli(model_id, device, threads, log)
+        if transcriber is None:
             return 2
-        # 手动导入的目录优先（与界面里「定位/导入…」写入的值一致）。
-        manual = cfg.get("manual_models") or {}
-        manual_path = manual.get(model_id) if isinstance(manual, dict) else None
-        location = Path(manual_path) if manual_path else Path(choice.location or "")
-        if choice.kind == "sherpa":
-            engine_id = Transcriber.ENGINE_PARAFORMER
-            sherpa_dir = location
-            whisper_dir = Path()
-            device = "cpu"  # paraformer 只能 CPU
-        else:
-            engine_id = Transcriber.ENGINE_BASE
-            sherpa_dir = Path()
-            whisper_dir = location
-        log(f"模型={choice.label}  文件={location}  设备={device}  线程={threads}")
-        transcriber = Transcriber(
-            engine_id,
-            sherpa_dir=sherpa_dir,
-            whisper_dir=whisper_dir,
-            device=device,
-            num_threads=threads,
-        )
-        transcriber.load()
         log("模型已加载，开始转写")
         jsonl_path = out_txt.with_suffix(".jsonl")
-        collected: list[Segment] = []
 
         def on_progress(done: float, total: float, elapsed: float) -> None:
             percent = (done / total * 100) if total else 0.0
             log(f"进度 {percent:5.1f}%  {format_timestamp(done)} / {format_timestamp(total)}")
 
-        def on_segment(segment: Segment) -> None:
-            collected.append(segment)
-
         transcriber.run(
-            media,
+            source,
             jsonl_path,
             chunk_seconds=CHUNK_SECONDS,
             progress_cb=on_progress,
-            segment_cb=on_segment,
         )
-        out_txt.parent.mkdir(parents=True, exist_ok=True)
-        with out_txt.open("w", encoding="utf-8") as handle:
-            for segment in collected:
-                handle.write(f"[{format_timestamp(segment.start)}] {segment.text}\n")
-        log(f"完成：{len(collected)} 段 -> {out_txt}")
+        rows = _read_jsonl_triples(jsonl_path)
+        _write_rows(out_txt, rows)
+        log(f"完成：{len(rows)} 段 -> {out_txt}")
         return 0
     except CancelledError:
         log("已取消")
@@ -1368,6 +1698,64 @@ def _run_headless(source: str, out_txt: Path, model_id: str, device: str, thread
     except Exception as exc:  # noqa: BLE001 - 命令行模式要把异常写进日志而不是崩掉
         log(f"失败：{exc.__class__.__name__}: {exc}")
         return 1
+
+
+def _parse_transcribe_flags(args: list[str], cfg: dict, source: str) -> dict:
+    """解析 ``--transcribe`` 后面的可选参数（缺省值全部来自配置文件）。"""
+    model_id = str(cfg.get("model_id") or registry.PARAFORMER_ID)
+    device = str(cfg.get("device") or "cpu")
+    threads = int(cfg.get("num_threads") or 8)
+    out_arg: str | None = None
+    pages = str(cfg.get("pages") or "")
+    cookies_browser = str(cfg.get("cookies_from_browser") or "")
+    cookiefile = ""
+    subtitle_first = True
+    position = 0
+    while position < len(args):
+        flag = args[position]
+        value = args[position + 1] if position + 1 < len(args) else ""
+        if flag == "--out":
+            out_arg = value
+            position += 2
+        elif flag == "--model":
+            model_id = value
+            position += 2
+        elif flag == "--device":
+            device = value
+            position += 2
+        elif flag == "--threads":
+            threads = max(1, min(32, int(value or threads)))
+            position += 2
+        elif flag == "--pages":
+            pages = value
+            position += 2
+        elif flag == "--cookies-from-browser":
+            cookies_browser = value
+            position += 2
+        elif flag == "--cookies":
+            cookiefile = value
+            position += 2
+        elif flag == "--no-subtitle-first":
+            subtitle_first = False
+            position += 1
+        else:
+            print(f"忽略未知参数：{flag}")
+            position += 1
+    if out_arg:
+        out_txt = Path(out_arg)
+    else:
+        stem = "transcript" if sources.is_supported_url(source) else Path(source).stem
+        out_txt = Path(str(cfg.get("output_dir"))) / ((stem or "transcript") + ".txt")
+    return {
+        "model_id": model_id,
+        "device": device,
+        "threads": threads,
+        "out_txt": out_txt,
+        "pages": pages,
+        "cookies_browser": cookies_browser,
+        "cookiefile": cookiefile,
+        "subtitle_first": subtitle_first,
+    }
 
 
 def main() -> None:
@@ -1393,30 +1781,20 @@ def main() -> None:
             raise SystemExit(2)
         source = rest[0]
         cfg = app_config.load()
-        model_id = cfg.get("model_id") or registry.PARAFORMER_ID
-        device = str(cfg.get("device") or "cpu")
-        threads = int(cfg.get("num_threads") or 8)
-        out_arg: str | None = None
-        args = rest[1:]
-        position = 0
-        while position < len(args):
-            flag = args[position]
-            value = args[position + 1] if position + 1 < len(args) else ""
-            if flag == "--out":
-                out_arg = value
-            elif flag == "--model":
-                model_id = value
-            elif flag == "--device":
-                device = value
-            elif flag == "--threads":
-                threads = max(1, min(32, int(value or threads)))
-            position += 2
-        if out_arg:
-            out_txt = Path(out_arg)
-        else:
-            stem = "transcript" if sources.is_supported_url(source) else Path(source).stem
-            out_txt = Path(str(cfg.get("output_dir"))) / ((stem or "transcript") + ".txt")
-        raise SystemExit(_run_headless(source, out_txt, str(model_id), device, threads))
+        parsed = _parse_transcribe_flags(rest[1:], cfg, source)
+        raise SystemExit(
+            _run_headless(
+                source,
+                parsed["out_txt"],
+                parsed["model_id"],
+                parsed["device"],
+                parsed["threads"],
+                pages=parsed["pages"],
+                cookies_browser=parsed["cookies_browser"],
+                cookiefile=parsed["cookiefile"],
+                subtitle_first=parsed["subtitle_first"],
+            )
+        )
 
     _install_excepthooks()
     root = tk.Tk()

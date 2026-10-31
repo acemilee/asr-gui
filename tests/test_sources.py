@@ -1,6 +1,7 @@
 """字幕解析 / 链接判定 / 下载参数 的单元测试（不联网、不加载模型）。"""
 
 import json
+import sys
 
 import pytest
 import sources
@@ -194,3 +195,58 @@ class TestDownloadErrors:
         cancel.set()
         result = sources.download_audio("https://example.com/a.mp3", tmp_path, cancel=cancel)
         assert result.cancelled is True or result.ok is False
+
+class TestCookieSources:
+    def test_browser_choices_shape(self) -> None:
+        assert sources.COOKIE_BROWSERS[0][0] == ""
+        assert sources.COOKIE_BROWSER_LABELS[""] == "不使用"
+        for key, label in sources.COOKIE_BROWSERS:
+            assert sources.COOKIE_BROWSER_LABELS[key] == label
+
+    def test_build_download_options_accepts_browser_cookie(self, tmp_path) -> None:
+        options = sources.build_download_options(
+            tmp_path, cookies_from_browser="chrome"
+        )
+        assert options["cookiesfrombrowser"] == ("chrome",)
+        assert "cookiefile" not in options
+
+    def test_build_download_options_accepts_cookiefile(self, tmp_path) -> None:
+        cookie_file = tmp_path / "cookies.txt"
+        options = sources.build_download_options(tmp_path, cookiefile=cookie_file)
+        assert options["cookiefile"] == str(cookie_file)
+        assert "cookiesfrombrowser" not in options
+
+    def test_no_cookie_options_by_default(self, tmp_path) -> None:
+        options = sources.build_download_options(tmp_path)
+        assert "cookiesfrombrowser" not in options
+        assert "cookiefile" not in options
+
+    def test_browser_cookies_returns_empty_when_unavailable(self, monkeypatch) -> None:
+        """浏览器库缺失 / 没登录时不能抛异常，只能返回空并记日志。"""
+        monkeypatch.setitem(sys.modules, "yt_dlp", None)
+        logs: list[str] = []
+        assert sources.browser_cookies("chrome", log=logs.append) == {}
+        assert any("登录态" in line for line in logs)
+
+    def test_load_cookie_file_netscape(self, tmp_path) -> None:
+        path = tmp_path / "cookies.txt"
+        path.write_text(
+            "# Netscape HTTP Cookie File\n"
+            "# comment line\n"
+            ".bilibili.com\tTRUE\t/\tFALSE\t1999999999\tSESSDATA\tabc\n"
+            "#HttpOnly_.bilibili.com\tTRUE\t/\tFALSE\t1999999999\tbili_jct\txyz\n"
+            "example.com\tFALSE\t/\tFALSE\t1999999999\tfoo\tbar\n",
+            encoding="utf-8",
+        )
+        cookies = sources.load_cookie_file(path)
+        assert cookies["SESSDATA"] == "abc"
+        assert cookies["bili_jct"] == "xyz"
+        assert cookies["foo"] == "bar"
+
+    def test_load_cookie_file_skips_broken_lines(self, tmp_path) -> None:
+        path = tmp_path / "cookies.txt"
+        path.write_text("too\tfew\tcolumns\n", encoding="utf-8")
+        assert sources.load_cookie_file(path) == {}
+
+    def test_load_cookie_file_missing(self, tmp_path) -> None:
+        assert sources.load_cookie_file(tmp_path / "nope.txt") == {}

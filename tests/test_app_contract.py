@@ -15,6 +15,7 @@ import pytest
 pytest.importorskip("tkinter", reason="该环境没有 tkinter，跳过 GUI 结构测试")
 
 import app  # noqa: E402
+import sources  # noqa: E402
 from engine import Transcriber  # noqa: E402
 
 APP_PATH = Path(app.__file__)
@@ -56,6 +57,12 @@ class TestPublicContract:
             "_subtitle_worker",
             "_on_source_change",
             "_update_download_progress",
+            "_apply_url_widgets",
+            "_ensure_transcriber",
+            "_transcribe_media",
+            "_emit_segments",
+            "_cookies_key",
+            "_rebuild_txt",
         ],
     )
     def test_methods_exist(self, method: str) -> None:
@@ -90,6 +97,55 @@ class TestPublicContract:
 
     def test_chunk_seconds(self) -> None:
         assert app.CHUNK_SECONDS == 300
+
+    def test_cookie_choices(self) -> None:
+        """登录态下拉：空 = 不使用，其余是 yt-dlp 认识的浏览器代号。"""
+        keys = [key for key, _label in sources.COOKIE_BROWSERS]
+        assert keys[0] == ""
+        assert "chrome" in keys
+        assert set(keys) == set(sources.COOKIE_BROWSER_LABELS)
+        labels = [label for _key, label in sources.COOKIE_BROWSERS]
+        assert labels[0] == "不使用"
+
+    def test_cli_flag_parsing(self) -> None:
+        parsed = app._parse_transcribe_flags(
+            ["--pages", "1,3-5", "--cookies-from-browser", "chrome", "--out", "x.txt"],
+            {"output_dir": "out"},
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+        )
+        assert parsed["pages"] == "1,3-5"
+        assert parsed["cookies_browser"] == "chrome"
+        assert str(parsed["out_txt"]).endswith("x.txt")
+        assert parsed["subtitle_first"] is True
+
+    def test_cli_subtitle_first_can_be_disabled(self) -> None:
+        parsed = app._parse_transcribe_flags(
+            ["--no-subtitle-first"],
+            {"output_dir": "out"},
+            "https://example.com/a.mp4",
+        )
+        assert parsed["subtitle_first"] is False
+        assert parsed["pages"] == ""
+
+    def test_default_output_name(self) -> None:
+        url = app._parse_transcribe_flags(
+            [], {"output_dir": "out"}, "https://example.com/a.mp4"
+        )
+        assert str(url["out_txt"]).replace("\\", "/").endswith("out/transcript.txt")
+        local = app._parse_transcribe_flags([], {"output_dir": "out"}, "D:/media/clip.mp4")
+        assert str(local["out_txt"]).replace("\\", "/").endswith("out/clip.txt")
+
+    def test_jsonl_triples_reader(self, tmp_path) -> None:
+        path = tmp_path / "a.jsonl"
+        path.write_text(
+            '{"start": 2.0, "end": 3.0, "text": "b"}\n'
+            "not json\n"
+            "\n"
+            '{"start": 1.0, "end": 1.5, "text": "a"}\n',
+            encoding="utf-8",
+        )
+        rows = app._read_jsonl_triples(path)
+        assert [row[2] for row in rows] == ["a", "b"]
 
 
 class TestNoHardcodedMachinePaths:

@@ -6,6 +6,52 @@ All notable changes to this project are documented here. Format follows
 
 ---
 
+## [0.1.2] - 2026-11-01
+
+视频链接这一路补齐了 B 站的三件事：**AI 字幕优先**（能拿到字幕就秒级出稿、完全不占模型）、
+**浏览器登录态**（拿 AI 字幕通常要登录）、**分 P 选择**（`1,3-5`）。上游这三项都做在 B 站/抖音专用
+代码里，这里做成了通用编排层。
+
+Bilibili links get the three things that actually matter: AI subtitles first (seconds instead of hours),
+browser login state (the AI subtitle track usually needs it), and per-page selection (`1,3-5`).
+
+### Added / 新增
+
+- **字幕优先（秒级出稿）**：B 站链接默认先查 AI 字幕轨（`x/player/wbi/v2`，带 wbi 签名）；
+  有字幕就直接转成 txt + jsonl，**不下载音频、不加载模型**。没有字幕（未登录 / 该 P 无字幕轨）
+  自动回落语音转写，日志里会写明原因。
+- **分 P 支持**：`分 P` 输入框（只在「视频链接」来源下出现）与命令行 `--pages 1,3-5`；
+  留空 = 全部。多分 P 时每 P 单独下载（`?p=N`），时间轴按前序 P 的时长累加，最后合并成一份 txt。
+- **登录态**：`登录态` 下拉（不使用 / Chrome / Edge / Firefox）从本机浏览器读 B 站 cookie，
+  命令行对应 `--cookies-from-browser chrome` 或 `--cookies cookies.txt`（Netscape 格式）。
+  读不到只记一行日志，不阻断流程。
+- **`bili.py`**：纯标准库的 B 站接口层（`fetch_video` / `find_subtitle` / `fetch_subtitle_segments` /
+  `parse_page_spec` / `with_page` / `select_pages`），不依赖第三方 SDK。
+- **`pipeline.py`**：GUI 与命令行共用的编排层（`run_url_pipeline`），单文件链接与分 P 视频走同一套逻辑。
+- **命令行**：`--pages`、`--cookies-from-browser`、`--cookies`、`--no-subtitle-first`。
+
+### Changed / 变更
+
+- 链接模式的输出命名：多分 P 时先写 `<名字>.p1.jsonl`、`<名字>.p2.jsonl`，结束后按时间轴合并成
+  `<名字>.txt`；单文件链接仍是 `<名字>.jsonl`。
+- `config.py` 新增 `pages` 与 `cookies_from_browser` 两个配置项；`APP_VERSION` 升到 `0.1.2`。
+- 「进度」在链接模式下会同时反映下载字节进度（`下载中 12.3 MB / 50.0 MB`）与已处理时长。
+
+### Fixed / 修复
+
+- `_run_bilibili` 的音频下载没有透传 cookie 参数（登录态下载会 403）。
+- `bili._pages_from` 只接受 `{"pages": [...]}`，而 pagelist 接口的 `data` 本身就是列表，
+  风控回退路径会 `AttributeError`。
+- `load_cookie_file` 遇到不存在的文件会抛异常，改为返回空字典。
+- **后台线程读写 Tk 变量**（`_url_worker` 里读 `var_pages` / `var_cookies`）会在非主线程抛
+  `RuntimeError: main thread is not in main loop`；改为在 `on_start`（主线程）取值后作为参数传入。
+
+### Tests / 测试
+
+- 新增 `tests/test_bili.py`（45 个用例）、`tests/test_pipeline.py`（18 个用例），
+  `tests/test_sources.py` 补 cookie 相关 9 个，`tests/test_app_contract.py` 补 6 个；
+  **共 221 个用例**，`ruff` 全绿。
+
 ## [0.1.1] - 2026-10-31
 
 加上「输入来源」：不再只能喂本地文件，可以直接贴视频链接，或者吃现成字幕。

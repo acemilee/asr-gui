@@ -69,7 +69,9 @@ _scratch/
 
 # --- Local working data
 # Archived upstream apps / model caches / run outputs (moved out of the repo root)
-_local/ (this checkout only) ------------------------------
+# Everything under _local/ (archived upstream app, model cache, run outputs,
+# upstream source clone) is machine-local and must never be committed.
+_local/
 # Audio downloaded from video URLs ("视频链接" source) while testing.
 downloads/
 

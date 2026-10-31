@@ -1,14 +1,30 @@
 # 打包说明 / Packaging
 
-把 `asr_gui/` 打成单文件 Windows exe（`ASR-GUI.exe`，约 109 MB）。
+把 `asr_gui/` 打成单文件 Windows exe（`ASR-GUI.exe`，约 115 MB）。
 
-Building a single-file Windows exe from `asr_gui/` (~109 MB).
+Building a single-file Windows exe from `asr_gui/` (~115 MB).
 
 ## 需要什么 / Requirements
 
 - Windows 10/11 x64
 - Python 3.9+（发布版用 3.13 构建 / the release was built with 3.13）
 - `python -m pip install -r requirements.txt -r requirements-dev.txt`（含 PyInstaller）
+
+## 用哪个解释器 / Which interpreter
+
+`build.bat` 按 `ASR_PYTHON` → `..\.venv` → `PATH` 的顺序找解释器，**并在开工前预检**
+`numpy / av / sherpa_onnx / ctranslate2 / faster_whisper / tokenizers / yt_dlp / PyInstaller`。
+缺任何一个就直接报错退出——否则会拿系统 Python 打出一个「几百 MB 且缺依赖」的坏 exe
+（v0.1.1 出过这事：PATH 上的 Python 装满了 tensorflow，体积从 109 MB 涨到 588 MB）。
+
+本机显式指定：
+
+```bat
+set ASR_PYTHON=E:\path\to\venv\Scripts\python.exe
+packaging\build.bat
+```
+
+体积异常时用 `build\asr-gui\Analysis-00.toc` 按顶层包名聚合排查（谁占得多一目了然）。
 
 ## 怎么构建 / How to build
 
@@ -36,7 +52,7 @@ python -m PyInstaller --clean --noconfirm packaging\asr-gui.spec
 
 ## 打进去什么 / What goes in
 
-- 程序本体、`engine.py` / `config.py` / `downloader.py` / `models_registry.py` / `sources.py`
+- 程序本体、`engine.py` / `config.py` / `downloader.py` / `models_registry.py` / `sources.py` / `bili.py` / `pipeline.py`
 - tkinter、PyAV（自带 FFmpeg）、sherpa-onnx（paraformer-zh + VAD + 标点）、
   faster-whisper / ctranslate2 / tokenizers / huggingface_hub
 - yt-dlp（「视频链接」来源：只解析页面 + 下载音频，不需要外部 ffmpeg）
@@ -75,3 +91,11 @@ dist\ASR-GUI.exe --transcribe sample.m4a --out out.txt --model paraformer-zh
 ```
 
 （`.log` 会写在 `out.txt` 旁边，方便排查。）
+
+B 站链接（走「视频链接」通道：先查 AI 字幕，没有就下音频再转写）：
+
+```bat
+dist\ASR-GUI.exe --transcribe https://www.bilibili.com/video/BV1xxx --pages 1,3-5 ^
+    --cookies-from-browser chrome --out out.txt --model paraformer-zh
+```
+

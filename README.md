@@ -13,6 +13,8 @@ Electron/Qt runtime, just Python 3.9+ and the standard library.
 
 ![GUI](asr_gui/GUI界面.png)
 
+![Video URL source](asr_gui/GUI视频链接.png)
+
 ![Model dropdown](asr_gui/GUI模型下拉.png)
 
 ## Why this exists
@@ -28,8 +30,11 @@ disk after every chunk, and the whole run can be cancelled and resumed at any ti
 - **Three input sources** - paste a video page URL (Bilibili / Douyin / YouTube) and only the
   audio track is downloaded (no transcoding, no video bytes), pick a local audio/video file, or feed
   a `.srt` / `.vtt` subtitle file straight through - the subtitle path skips the models entirely and
-  finishes in a second. URL downloads use [yt-dlp](https://github.com/yt-dlp/yt-dlp) and fetch only
-  the first part of a multi-part video.
+  finishes in a second. URL downloads use [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+- **Bilibili niceties** - AI subtitles first (instant output, no model, no download); per-page
+  selection (`1,3-5`, blank = all, timelines offset and merged into one text); browser login state
+  (Chrome / Edge / Firefox) because the AI subtitle track usually needs a logged-in session.
+  No login - automatic fallback to speech recognition, with the reason in the log.
 - **8 model tiers in one dropdown** — from `tiny` (≈75 MB, instant) to `large-v3` (≈3.1 GB) and
   the Chinese-tuned `paraformer-zh`. The list shows `已缓存` (cached) or
   `未缓存·需下载 ~XXX MB` (not cached · download size) per tier.

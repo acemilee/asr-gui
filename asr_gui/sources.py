@@ -172,10 +172,16 @@ def build_download_options(
     target_dir: str | Path,
     progress_hook: Callable[[dict], None] | None = None,
     log: LogCallback | None = None,
+    cookies_from_browser: str | None = None,
+    cookiefile: str | Path | None = None,
 ) -> dict:
     """构造 yt-dlp 的 options（抽成纯函数便于测试）。
 
-    只下音频轨、不转码；分 P / 播放列表只取第一个，避免一次拖几个小时。
+    只下音频轨、不转码。分 P 由调用方逐个改写 ``?p=N`` 后单独下载（一次只下一个），
+    因此这里开 ``noplaylist``——避免点一下链接顺手拖回整个合集。
+
+    ``cookies_from_browser`` 直接用浏览器里的登录态（会员 / 风控内容需要）；
+    ``cookiefile`` 用于浏览器扩展导出的 Netscape cookie 文件。
     """
     options: dict = {
         "format": "bestaudio/best",
@@ -197,6 +203,11 @@ def build_download_options(
         options["progress_hooks"] = [progress_hook]
     if log is not None:
         options["logger"] = _LoggerShim(log)
+    if cookies_from_browser:
+        # yt-dlp 只接受元组形式：("chrome",) / ("chrome", "Default")
+        options["cookiesfrombrowser"] = (cookies_from_browser,)
+    if cookiefile:
+        options["cookiefile"] = str(cookiefile)
     return options
 
 
@@ -247,6 +258,8 @@ def download_audio(
     progress_cb: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
     log: LogCallback | None = None,
+    cookies_from_browser: str | None = None,
+    cookiefile: str | Path | None = None,
 ) -> DownloadResult:
     """用 yt-dlp 把这个链接的音频下载到 ``target_dir``。
 
@@ -278,7 +291,13 @@ def download_audio(
         if progress_cb is not None:
             progress_cb(done, total, "下载中")
 
-    options = build_download_options(home, progress_hook=hook, log=log)
+    options = build_download_options(
+        home,
+        progress_hook=hook,
+        log=log,
+        cookies_from_browser=cookies_from_browser,
+        cookiefile=cookiefile,
+    )
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(text, download=True)
@@ -299,14 +318,92 @@ def download_audio(
         return DownloadResult(ok=False, error=f"{exc.__class__.__name__}: {exc}")
 
 
+# ----------------------------------------------------------------- 登录态（cookie）
+#: 界面下拉用：(yt-dlp 的浏览器代号, 显示文案)。空代号 = 不使用登录态。
+COOKIE_BROWSERS = (
+    ("", "不使用"),
+    ("chrome", "Chrome"),
+    ("edge", "Edge"),
+    ("firefox", "Firefox"),
+)
+COOKIE_BROWSER_LABELS = {key: label for key, label in COOKIE_BROWSERS}
+
+
+def browser_cookies(
+    browser: str,
+    domain: str = "bilibili.com",
+    log: LogCallback | None = None,
+) -> dict[str, str]:
+    """从浏览器读取 cookie（借 yt-dlp 的 cookie 提取器，不自己解浏览器数据库）。
+
+    读取失败（浏览器在跑、库里没登录、没装 yt-dlp）都只记一行日志并返回空字典：
+    没有登录态时大部分公开视频仍可转写，不该因此整体失败。
+    """
+    if not browser:
+        return {}
+    try:
+        import yt_dlp
+    except ImportError:
+        if log is not None:
+            log("缺少 yt-dlp，无法读取浏览器登录态。")
+        return {}
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            jar = ydl.cookiejar
+            cookies = {
+                cookie.name: cookie.value
+                for cookie in jar
+                if cookie.value and domain in (cookie.domain or "")
+            }
+    except Exception as exc:  # 浏览器锁 / 无权限 / 未登录，统一降级
+        if log is not None:
+            log(f"读取浏览器登录态失败（{browser}）：{exc.__class__.__name__}: {exc}")
+        return {}
+    if log is not None:
+        if cookies:
+            log(f"已读取 {browser} 登录态：{len(cookies)} 个 cookie。")
+        else:
+            log(f"{browser} 里没有 {domain} 的登录态，按未登录处理。")
+    return cookies
+
+
+def load_cookie_file(path: str | Path) -> dict[str, str]:
+    """读 Netscape 格式的 cookie 文件（浏览器扩展导出的那种）。
+
+    文件不存在或没法读时返回空字典：调用方按「没有登录态」继续跑即可。
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    cookies: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("# ") or line == "# Netscape HTTP Cookie File":
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_") :]
+        fields = line.split("\t")
+        if len(fields) != 7:
+            continue
+        name, value = fields[5], fields[6]
+        if name and value:
+            cookies[name] = value
+    return cookies
+
+
 __all__ = [
+    "COOKIE_BROWSERS",
+    "COOKIE_BROWSER_LABELS",
     "SUBTITLE_SUFFIXES",
     "DownloadResult",
     "SubtitleSegment",
     "build_download_options",
+    "browser_cookies",
     "clean_text",
     "download_audio",
     "is_supported_url",
+    "load_cookie_file",
     "parse_srt",
     "parse_subtitle_file",
     "parse_vtt",
