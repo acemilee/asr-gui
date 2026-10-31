@@ -7,6 +7,8 @@
 [![CI](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
+[![Release](https://img.shields.io/github/v/release/acemilee/asr-gui)](https://github.com/acemilee/asr-gui/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/acemilee/asr-gui/total)](https://github.com/acemilee/asr-gui/releases)
 
 ![GUI](asr_gui/GUI界面.png)
 
