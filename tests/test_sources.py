@@ -278,3 +278,41 @@ class TestCookieSources:
 
     def test_load_cookie_file_missing(self, tmp_path) -> None:
         assert sources.load_cookie_file(tmp_path / "nope.txt") == {}
+
+
+class TestExtractUrl:
+    """B 站「复制分享」会把标题和话题一起带过来。"""
+
+    def test_plain_url(self):
+        assert sources.extract_url("https://www.bilibili.com/video/BV1xx411c7mD") == (
+            "https://www.bilibili.com/video/BV1xx411c7mD"
+        )
+
+    def test_share_text_with_title(self):
+        text = (
+            "【全军配置最豪横的集团军，第82集团军，究竟有多强？ #军事科普】\n"
+            "https://www.bilibili.com/video/BV1M6pc65Eox?vd_source=deadbeef"
+        )
+        assert sources.extract_url(text) == (
+            "https://www.bilibili.com/video/BV1M6pc65Eox?vd_source=deadbeef"
+        )
+
+    def test_trailing_chinese_punctuation_is_trimmed(self):
+        assert sources.extract_url("看看这个 https://b23.tv/abc123。") == "https://b23.tv/abc123"
+        assert sources.extract_url("链接：https://b23.tv/abc123，挺好") == "https://b23.tv/abc123"
+
+    def test_first_url_wins(self):
+        text = "https://b23.tv/one 和 https://b23.tv/two"
+        assert sources.extract_url(text) == "https://b23.tv/one"
+
+    def test_no_url_returns_empty(self):
+        assert sources.extract_url("这里没有链接") == ""
+        assert sources.extract_url("") == ""
+        assert sources.extract_url(None) == ""
+
+    def test_is_supported_url_accepts_share_text(self):
+        assert sources.is_supported_url("【标题】 https://www.bilibili.com/video/BV1M6pc65Eox")
+
+    def test_is_supported_url_rejects_schemeless(self):
+        assert not sources.is_supported_url("www.bilibili.com/video/BV1M6pc65Eox")
+        assert not sources.is_supported_url("BV1M6pc65Eox")

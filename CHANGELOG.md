@@ -6,6 +6,22 @@ All notable changes to this project are documented here. Format follows
 
 ---
 
+## [0.1.4] - 2026-11-01
+
+### Added
+- 「输出」区新增 **打开目录** 按钮：直接打开当前输出目录（不存在会先创建），不用再复制路径到资源管理器。
+- `sources.extract_url()`：从任意文本里抠出第一个 http(s) 链接。
+- OK / EN: new **Open folder** button next to the output directory; `sources.extract_url()`.
+
+### Changed
+- 「视频链接」来源接受 B 站「复制分享」的整段文案（标题 + 话题 + 链接），自动只取链接；
+  「粘贴」按钮与命令行 `--transcribe` 同样处理。
+  EN: the URL source now accepts a pasted share blob and keeps only the link.
+
+### Tests
+- `tests/test_sources.py` 新增 `TestExtractUrl`（6 例：纯链接、分享文案、中文标点、多链接、无链接、无 scheme）；
+  `tests/test_app_contract.py` 方法清单加入 `_open_output_dir`。→ **231 用例**。
+
 ## [0.1.3] - 2026-11-01
 
 下载这一路更抗折腾：网络抖一下不再直接判死，失败时也告诉你该看哪儿。

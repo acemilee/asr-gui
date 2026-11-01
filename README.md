@@ -136,7 +136,7 @@ The "source" dropdown at the top decides what one run consumes:
 
 | Source | You provide | What happens | Needs a model |
 | --- | --- | --- | --- |
-| Video URL | a page URL (`https://...`); the 粘贴 button pastes from the clipboard | yt-dlp downloads the audio track only into `<app dir>/downloads` (`%APPDATA%\asr-gui\downloads` for the exe), then the usual chunked transcription runs | yes |
+| Video URL | a page URL (`https://...`); the 粘贴 button pastes from the clipboard, and Bilibili's "copy share" blob (title + link) works too — only the link is kept | yt-dlp downloads the audio track only into `<app dir>/downloads` (`%APPDATA%\asr-gui\downloads` for the exe), then the usual chunked transcription runs | yes |
 | Local file | path to an audio or video file | decoded and transcribed directly; common containers are fine | yes |
 | Subtitle file | a `.srt` / `.vtt` file | parsed into txt + jsonl immediately | **no** |
 

@@ -358,6 +358,10 @@ class AsrGui:
             f3, text="浏览…", command=lambda: self._browse_dir(self.var_outdir)
         )
         self.btn_outdir.grid(row=0, column=2, padx=(6, 0))
+        self.btn_outdir_open = ttk.Button(
+            f3, text="打开目录", command=self._open_output_dir
+        )
+        self.btn_outdir_open.grid(row=0, column=3, padx=(6, 0))
 
         ttk.Label(f3, text="文件名：").grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.ent_name = ttk.Entry(f3, textvariable=self.var_name, width=24)
@@ -412,8 +416,12 @@ class AsrGui:
                 self._log("剪贴板里没有文本，请手动粘贴链接。")
                 return
             if text:
-                self.var_media.set(text)
-                self._log(f"已从剪贴板粘贴：{text[:80]}")
+                url = sources.extract_url(text)
+                self.var_media.set(url or text)
+                if url:
+                    self._log(f"已从剪贴板粘贴链接：{url}")
+                else:
+                    self._log("剪贴板里没找到 http(s) 链接，已原样填入，请检查。")
             return
         if source == SOURCE_SUB:
             path = filedialog.askopenfilename(title="选择字幕文件", filetypes=SUBTITLE_FILE_TYPES)
@@ -653,6 +661,17 @@ class AsrGui:
         except Exception as exc:
             self._log(f"打开目录失败：{exc}")
 
+    def _open_output_dir(self) -> None:
+        """打开「输出目录」（不存在就先建出来）。"""
+        raw = self.var_outdir.get().strip()
+        target = Path(raw) if raw else app_config.default_output_dir()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._log(f"创建输出目录失败：{exc}")
+            return
+        self._open_folder(target)
+
     def _save_cfg_from_ui(self) -> None:
         self.cfg["model_id"] = self._current_model_id() or registry.PARAFORMER_ID
         self.cfg["device"] = self.var_device.get().strip() or "cpu"
@@ -684,11 +703,20 @@ class AsrGui:
             messagebox.showerror("无法开始", "请先填写或选择输入内容。")
             return
         if source == SOURCE_URL:
-            if not sources.is_supported_url(media):
+            url = sources.extract_url(media)
+            if not url:
                 messagebox.showerror(
-                    "无法开始", f"链接要以 http:// 或 https:// 开头：\n{media}"
+                    "无法开始",
+                    "这段文本里没找到 http:// 或 https:// 开头的链接：\n"
+                    f"{media[:200]}\n\n"
+                    "B 站「复制分享」会把标题一起带过来，只保留链接即可。",
                 )
                 return
+            if url != media:
+                # 粘贴的是分享文案：只留链接，省得用户手动删标题
+                self.var_media.set(url)
+                media = url
+                self._log(f"已从分享文案里取出链接：{url}")
         elif source == SOURCE_SUB:
             subtitle = Path(media)
             if not subtitle.is_file():
@@ -1466,7 +1494,9 @@ def _run_selftest(target: Path, interactive: bool) -> int:
 
 def _resolve_source(source: str, log) -> "Path | None":
     """把命令行来源解析成本地媒体文件：URL 先下音频，其余当本地路径。"""
-    if sources.is_supported_url(source):
+    url = sources.extract_url(source)
+    if url:
+        source = url
         log(f"下载音频：{source}")
         result = sources.download_audio(source, app_config.downloads_dir(), log=log)
         if not result.ok or result.path is None:
@@ -1653,6 +1683,11 @@ def _run_headless(
             log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         except OSError:
             pass
+
+    # 允许把「分享文案」整段粘进来
+    url = sources.extract_url(source)
+    if url:
+        source = url
 
     try:
         is_subtitle = source.lower().endswith(sources.SUBTITLE_SUFFIXES)

@@ -162,10 +162,29 @@ def write_jsonl(path: str | Path, segments: list[SubtitleSegment]) -> None:
 
 
 # ----------------------------------------------------------------- 视频链接下载
-def is_supported_url(value: str) -> bool:
-    """只接受 http(s) 链接（本地路径走「本地文件」）。"""
+_URL_RE = re.compile(r"https?://[^\s<>\"'，。、；！？（）【】]+", re.IGNORECASE)
+
+
+def extract_url(value: str) -> str:
+    """从任意文本里抠出第一个 http(s) 链接。
+
+    B 站「复制分享文案」会带标题和话题，例如
+    ``【全军配置最豪横的集团军】https://www.bilibili.com/video/BV1M6pc65Eox?vd_source=…``；
+    直接当成链接会因为不是以 ``http`` 开头而被拒。这里只取 URL 本身。
+    """
     text = (value or "").strip()
-    return text.lower().startswith(SUPPORTED_URL_PREFIXES) and len(text) > len("https://")
+    if not text:
+        return ""
+    match = _URL_RE.search(text)
+    if match is None:
+        return ""
+    url = match.group(0).rstrip(".,;:!?)]}>，。、；：！？）】")
+    return url
+
+
+def is_supported_url(value: str) -> bool:
+    """只接受 http(s) 链接（本地路径走「本地文件」）；分享文案里的链接也算。"""
+    return extract_url(value) != ""
 
 
 def build_download_options(
@@ -460,6 +479,7 @@ __all__ = [
     "clean_text",
     "describe_download_error",
     "download_audio",
+    "extract_url",
     "is_supported_url",
     "load_cookie_file",
     "parse_srt",
