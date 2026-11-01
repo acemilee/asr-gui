@@ -68,13 +68,13 @@ laptop is fine), and optionally an NVIDIA GPU with CUDA 12 for the faster-whispe
 
 ### Windows without Python: grab the exe
 
-Download `ASR-GUI-v0.1.0-win64.exe` (~109 MB) from the
+Download `ASR-GUI.exe` (~115 MB) from the
 [Releases](https://github.com/acemilee/asr-gui/releases) page and double-click it. Models are not
 bundled: pick one in the dropdown and press **Download model**, or point **Locate / import…** at an
 existing cache directory. Verify the download with:
 
 ```bat
-certutil -hashfile ASR-GUI-v0.1.0-win64.exe SHA256
+certutil -hashfile ASR-GUI.exe SHA256
 ```
 
 The exe also accepts two command-line entry points (handy for troubleshooting and batch jobs):

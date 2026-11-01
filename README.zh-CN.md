@@ -60,12 +60,11 @@ GPU 时另需 NVIDIA 显卡 + CUDA 12。
 
 ### Windows：不想装 Python？直接下 exe
 
-在 [Releases](https://github.com/acemilee/asr-gui/releases) 页面下载 `ASR-GUI-v0.1.0-win64.exe`（约
-109 MB），双击即可运行；模型不随包分发，首次在界面里选模型点「下载模型」，或点「定位/导入…」指向
+在 [Releases](https://github.com/acemilee/asr-gui/releases) 页面下载 `ASR-GUI.exe`（约 115 MB），双击即可运行；模型不随包分发，首次在界面里选模型点「下载模型」，或点「定位/导入…」指向
 已有的模型缓存目录。校验文件完整性：
 
 ```bat
-certutil -hashfile ASR-GUI-v0.1.0-win64.exe SHA256
+certutil -hashfile ASR-GUI.exe SHA256
 ```
 
 exe 还带两个命令行入口，方便排查问题与批处理：
