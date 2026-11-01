@@ -9,6 +9,8 @@ env/
 .eggs/
 build/
 dist/
+# 本地就地运行用的 exe（dist/ 才是构建产物；根目录这份只是方便双击）
+/*.exe
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
