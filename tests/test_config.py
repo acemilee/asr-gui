@@ -79,15 +79,22 @@ class TestDefaultsAndRoundTrip:
             "output_dir",
             "last_media",
             "output_name",
+            "source",
+            "pages",
+            "cookies_from_browser",
             "manual_models",
         }
         assert data["endpoint"] == "mirror"
         assert data["manual_models"] == {}
+        assert data["source"] == "本地文件"
 
     def test_save_then_load(self, config_home: Path) -> None:
         data = app_config.defaults()
         data["model_id"] = "small"
         data["num_threads"] = 12
+        data["source"] = "视频链接"
+        data["pages"] = "1,3-5"
+        data["cookies_from_browser"] = "chrome"
         data["manual_models"] = {"small": str(config_home / "imported")}
         ok, message = app_config.save(data)
         assert ok is True and message == ""
@@ -96,6 +103,10 @@ class TestDefaultsAndRoundTrip:
         loaded = app_config.load()
         assert loaded["model_id"] == "small"
         assert loaded["num_threads"] == 12
+        # 回归：这三项曾因不在 defaults() 里被 load() 静默丢弃
+        assert loaded["source"] == "视频链接"
+        assert loaded["pages"] == "1,3-5"
+        assert loaded["cookies_from_browser"] == "chrome"
         assert loaded["manual_models"] == {"small": str(config_home / "imported")}
 
     def test_unknown_keys_are_dropped(self, config_home: Path) -> None:

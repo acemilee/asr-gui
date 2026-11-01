@@ -26,6 +26,8 @@ out/
 !requirements.txt
 !requirements*.txt
 !LICENSE.txt
+# PyInstaller version metadata is source, not output.
+!packaging/version_info.txt
 logs/
 *.log
 *.part

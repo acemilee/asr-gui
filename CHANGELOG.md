@@ -6,6 +6,32 @@ All notable changes to this project are documented here. Format follows
 
 ---
 
+## [0.1.3] - 2026-11-01
+
+下载这一路更抗折腾：网络抖一下不再直接判死，失败时也告诉你该看哪儿。
+
+Downloading became far more forgiving of flaky networks, and failures now say what to look at.
+
+### Added / 新增
+
+- **失败信息会翻译成人话**：命中 `WinError 10061/10054/10053`、`timed out`、`connection reset`、
+  `Remote end closed` 时，错误里直接写明「网络侧问题（代理 / VPN / 加速器中途断开…）」，并提示
+  「已下载的部分会续传，再点一次开始即可」，原始错误保留在末尾。`sources.describe_download_error()`。
+
+### Changed / 变更
+
+- **重试更耐用**：`retries` / `fragment_retries` 3 → **10**，新增 `extractor_retries`、
+  `file_access_retries`，并用 `retry_sleep_functions` 做指数退避（1,2,4,8,16,20…秒，封顶 20）。
+  之前一次 3 连败就整页失败，现在能扛住十几秒的网络中断。
+
+### Fixed / 修复
+
+- **点「停止」不再被 yt-dlp 拉起重试**：取消信号改为 `BaseException` 子类（`_CancelSignal`），
+  穿透 yt-dlp 内部的 `except Exception`，下载立即中止（此前会把重试次数跑满，界面看起来像卡住）。
+- **来源 / 分 P / 登录态不再每次启动被重置**：`config.defaults()` 缺这三个键，`load()` 会把
+  已存的 `source` / `pages` / `cookies_from_browser` 静默丢掉（界面永远回到「本地文件」）。
+  现在三项都进了 defaults，并有回归测试锁住。
+
 ## [0.1.2] - 2026-11-01
 
 视频链接这一路补齐了 B 站的三件事：**AI 字幕优先**（能拿到字幕就秒级出稿、完全不占模型）、

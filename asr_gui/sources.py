@@ -191,8 +191,16 @@ def build_download_options(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "retries": 3,
-        "fragment_retries": 3,
+        # 网络抖一下不该让整页失败：多给几次机会，退避重试（1,2,4,8,20,20…）
+        "retries": 10,
+        "fragment_retries": 10,
+        "extractor_retries": 3,
+        "file_access_retries": 3,
+        "retry_sleep_functions": {
+            "http": _retry_backoff,
+            "fragment": _retry_backoff,
+            "extractor": _retry_backoff,
+        },
         "socket_timeout": 30,
         "concurrent_fragment_downloads": 4,
         "windowsfilenames": True,
@@ -252,6 +260,44 @@ def _pick_file(info: dict, target_dir: str | Path) -> Path | None:
     return None
 
 
+def _retry_backoff(attempt: int) -> float:
+    """yt-dlp 的 ``retry_sleep_functions``：第 n 次重试前等多久（秒，封顶 20）。"""
+    return float(min(2**max(0, attempt - 1), 20))
+
+
+#: 网络类失败的典型字样 → 给人看的解释。命中就补一句「多为代理/VPN 不稳定」。
+_NETWORK_HINTS = (
+    ("10061", "连接被拒绝（WinError 10061）"),
+    ("10054", "连接被对端强制关闭（WinError 10054）"),
+    ("10053", "连接被本机中止（WinError 10053）"),
+    ("remote end closed", "对端关闭了连接"),
+    ("connection reset", "连接被重置"),
+    ("timed out", "读取超时"),
+    ("temporary failure in name resolution", "DNS 解析失败"),
+)
+
+
+class _CancelSignal(BaseException):
+    """用户点「停止」时的内部信号（BaseException 才会穿透 yt-dlp 的 except Exception）。"""
+
+
+def describe_download_error(exc: BaseException) -> str:
+    """把 yt-dlp 的异常翻译成一句能指导用户的话（原始信息保留在后面）。"""
+    raw = str(exc)
+    lowered = raw.lower()
+    for needle, label in _NETWORK_HINTS:
+        if needle in lowered:
+            return (
+                f"下载失败：{label}。这条链路是 yt-dlp 直连 B 站 CDN，出现这种情况几乎都是"
+                "网络侧问题（代理 / VPN / 加速器中途断开、DNS 被劫持、站点限速），"
+                "不是转写引擎的问题。\n"
+                "建议：关掉或换一个代理 / VPN，确认浏览器能正常播放这个视频后，"
+                "直接再点一次「开始转写」——已下载的部分会续传，不会从头来。\n"
+                f"原始错误：{raw}"
+            )
+    return f"{exc.__class__.__name__}: {raw}"
+
+
 def download_audio(
     url: str,
     target_dir: str | Path,
@@ -283,7 +329,9 @@ def download_audio(
 
     def hook(status: dict) -> None:
         if cancel is not None and cancel.is_set():
-            raise RuntimeError("__cancelled__")
+            # 用 BaseException 子类：yt-dlp 内部只 catch Exception，这样点了「停止」
+            # 会立刻终止，而不是被它的重试逻辑又拉起 10 次。
+            raise _CancelSignal()
         if status.get("status") != "downloading":
             return
         done = int(status.get("downloaded_bytes") or 0)
@@ -312,10 +360,12 @@ def download_audio(
             if path is None:
                 return DownloadResult(ok=False, title=title, error="下载结束但没找到落盘文件。")
             return DownloadResult(ok=True, path=path, title=title)
+    except _CancelSignal:
+        return DownloadResult(ok=False, cancelled=True, error="已取消下载。")
     except Exception as exc:  # yt-dlp 的异常类型很多，统一兜底
         if cancel is not None and cancel.is_set():
             return DownloadResult(ok=False, cancelled=True, error="已取消下载。")
-        return DownloadResult(ok=False, error=f"{exc.__class__.__name__}: {exc}")
+        return DownloadResult(ok=False, error=describe_download_error(exc))
 
 
 # ----------------------------------------------------------------- 登录态（cookie）
@@ -401,6 +451,7 @@ __all__ = [
     "build_download_options",
     "browser_cookies",
     "clean_text",
+    "describe_download_error",
     "download_audio",
     "is_supported_url",
     "load_cookie_file",

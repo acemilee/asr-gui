@@ -21,7 +21,7 @@ CONFIG_FILENAME = "config.json"
 
 # Keep in sync with pyproject.toml / the git tag. Shown in the window title and
 # in the packaged exe name, so it must be a plain string literal here.
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 
 DEFAULT_MODEL_ID = "paraformer-zh"
 DEFAULT_DEVICE = "cpu"
@@ -149,6 +149,10 @@ def defaults() -> dict:
         "output_dir": str(default_output_dir()),
         "last_media": "",
         "output_name": "transcript",
+        # 输入来源（本地文件 / 视频链接 / 字幕文件）与链接模式的两个选项
+        "source": "本地文件",
+        "pages": "",
+        "cookies_from_browser": "",
         # model_id -> explicit directory chosen via "import / locate"
         "manual_models": {},
     }

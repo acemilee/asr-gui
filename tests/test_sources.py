@@ -159,7 +159,10 @@ class TestDownloadOptions:
         assert options["format"] == "bestaudio/best"
         assert options["noplaylist"] is True
         assert options["socket_timeout"] == 30
-        assert options["retries"] == 3
+        # 网络抖一下不该让整页失败：重试次数给足，并带指数退避
+        assert options["retries"] >= 10
+        assert options["fragment_retries"] >= 10
+        assert options["retry_sleep_functions"]["http"](4) == 8.0
         assert "%(id)s" in options["outtmpl"]
         assert options["paths"]["home"] == str(tmp_path)
         assert options["quiet"] is True
@@ -195,6 +198,21 @@ class TestDownloadErrors:
         cancel.set()
         result = sources.download_audio("https://example.com/a.mp3", tmp_path, cancel=cancel)
         assert result.cancelled is True or result.ok is False
+
+class TestFriendlyErrors:
+    def test_network_errors_are_explained(self):
+        for exc in (
+            Exception("ERROR: [download] Got error: [WinError 10061] refused"),
+            Exception("The read operation timed out"),
+            Exception("Remote end closed connection without response"),
+        ):
+            text = sources.describe_download_error(exc)
+            assert "网络侧问题" in text
+            assert "原始错误" in text
+
+    def test_unknown_error_keeps_type_and_message(self):
+        assert sources.describe_download_error(ValueError("boom")) == "ValueError: boom"
+
 
 class TestCookieSources:
     def test_browser_choices_shape(self) -> None:
