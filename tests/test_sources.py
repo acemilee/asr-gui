@@ -162,7 +162,17 @@ class TestDownloadOptions:
         # 网络抖一下不该让整页失败：重试次数给足，并带指数退避
         assert options["retries"] >= 10
         assert options["fragment_retries"] >= 10
-        assert options["retry_sleep_functions"]["http"](4) == 8.0
+        sleep_func = options["retry_sleep_functions"]["http"]
+        # 回归：yt-dlp 是 sleep_func(n=count - 1) 关键字调用，用位置参数测试会漏掉
+        assert sleep_func(n=0) == 1.0
+        assert sleep_func(n=1) == 2.0
+        assert sleep_func(n=4) == 16.0
+        assert sleep_func(n=0, extra="ignored") == 1.0
+        assert sleep_func(6) == 20.0
+        assert all(
+            options["retry_sleep_functions"][key] is sleep_func
+            for key in ("http", "fragment", "extractor")
+        )
         assert "%(id)s" in options["outtmpl"]
         assert options["paths"]["home"] == str(tmp_path)
         assert options["quiet"] is True

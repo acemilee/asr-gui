@@ -100,3 +100,25 @@ paraformer-zh 的 ONNX 含 `fsmn_block`（流式结构）→ **只能 CPU**。
 **定位体积的方法**：`build\asr-gui\Analysis-00.toc` 里每个 `PYMODULE`/`BINARY` 都是绝对路径，按顶层包名聚合大小即可一眼看出谁在膨胀（一行 python 就能统计）。
 
 **规则**：①打包脚本必须在动手前**校验解释器依赖**（本项目已在 `build.bat` 加 `[0/3]` 预检：缺 `numpy/av/sherpa_onnx/ctranslate2/faster_whisper/tokenizers/yt_dlp/PyInstaller` 就直接报错退出，并提示 `ASR_PYTHON`），绝不允许"找不到 venv 就静默用 PATH 上的 python"；②产物大小突变（>1.5 倍）必须当成 bug 查，不能当"加了功能所以变大"接受；③`collect_all()` 会把包的元数据/可选依赖一起收，纯 Python 包（如 yt-dlp）用 `collect_submodules()` 更干净。
+
+## 10. 给第三方库传回调：参数名也算接口，别只测位置参数（2026-11-01 踩）
+
+**事故**：v0.1.3 给 yt-dlp 配了 `retry_sleep_functions={"http": _retry_backoff, …}`，签名写成 `_retry_backoff(attempt)`。
+第一次真正触发重试时直接炸：`TypeError: _retry_backoff() got an unexpected keyword argument 'n'`，
+整次下载被判失败——**加固版比原版还容易失败**，因为原来 3 次重试不会走到退避逻辑，现在 10 次必然会走到。
+
+**根因**：yt-dlp 内部是按**关键字**调用的：`yt_dlp/utils/_utils.py` 的
+`RetryManager.report_retry()` 里写着 `delay = float_or_none(sleep_func(n=count - 1))`。
+参数名必须叫 `n`（且要容忍多余关键字），跟"第几次重试"这个语义无关。
+
+**为什么单测没抓到**：测试里写的是 `options["retry_sleep_functions"]["http"](4)`（位置参数），
+而库用的是关键字 —— 位置参数在 Python 里照样能过。**教训**：给外部库的回调，测试必须**按库的调用方式**写
+（关键字），或者干脆跑一次真实链路。
+
+**廉价前置校验（最终采用）**：起一个本地 HTTP 服务，前两次请求**只发一半字节然后断连**，
+再让 `sources.download_audio()` 去下 —— 真实 yt-dlp 会打印
+`Got error: Downloaded 400022 bytes, expected 800044 bytes. Retrying (1/10)... Sleeping 1.00 seconds ...`
+然后续传成功（hits=3、耗时 1.49 s、文件字节数正确）。这条 40 行脚本比"再等用户复现一次"便宜得多。
+
+**规则**：①回调用关键字参数名对齐库实现（读库源码，别猜）；②涉及重试/退避这类"平时不走到"的分支，
+必须有能真实触发它的测试，而不是只测配置字典；③加固一件事之后，要问一句"这条新路径第一次执行会在哪炸"。

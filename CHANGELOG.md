@@ -26,6 +26,10 @@ Downloading became far more forgiving of flaky networks, and failures now say wh
 
 ### Fixed / 修复
 
+- **重试退避的回调签名写错，导致第一次重试就崩**：`_retry_backoff` 的参数名是 `attempt`，而 yt-dlp
+  按关键字调用 `sleep_func(n=count - 1)` → `TypeError: _retry_backoff() got an unexpected keyword
+  argument 'n'`，整次下载被判失败（v0.1.3 首版比 v0.1.2 更容易失败）。已改为 `n` 并容忍多余关键字，
+  退避序列 1/2/4/8/16/20…秒；单测改为按关键字调用，另加本地「传输中途断连」的真实链路测试。
 - **点「停止」不再被 yt-dlp 拉起重试**：取消信号改为 `BaseException` 子类（`_CancelSignal`），
   穿透 yt-dlp 内部的 `except Exception`，下载立即中止（此前会把重试次数跑满，界面看起来像卡住）。
 - **来源 / 分 P / 登录态不再每次启动被重置**：`config.defaults()` 缺这三个键，`load()` 会把

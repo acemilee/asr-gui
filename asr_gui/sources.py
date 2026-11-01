@@ -260,9 +260,16 @@ def _pick_file(info: dict, target_dir: str | Path) -> Path | None:
     return None
 
 
-def _retry_backoff(attempt: int) -> float:
-    """yt-dlp 的 ``retry_sleep_functions``：第 n 次重试前等多久（秒，封顶 20）。"""
-    return float(min(2**max(0, attempt - 1), 20))
+def _retry_backoff(n: int = 0, **_kwargs) -> float:
+    """yt-dlp 的 ``retry_sleep_functions``：第 n 次重试前等多久（秒，封顶 20）。
+
+    yt-dlp 内部是按 **关键字** 调用的 —— ``sleep_func(n=count - 1)``（见
+    ``yt_dlp/utils/_utils.py`` 的 ``RetryManager.report_retry``）。参数名必须叫 ``n``
+    并容忍多余关键字；写成 ``attempt`` 会在**第一次重试**时抛
+    ``TypeError: _retry_backoff() got an unexpected keyword argument 'n'``
+    （v0.1.3 首版就这么翻车的：单测用位置参数，永远测不出来）。
+    """
+    return float(min(2 ** min(max(0, int(n)), 5), 20))
 
 
 #: 网络类失败的典型字样 → 给人看的解释。命中就补一句「多为代理/VPN 不稳定」。
