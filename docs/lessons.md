@@ -122,3 +122,16 @@ paraformer-zh 的 ONNX 含 `fsmn_block`（流式结构）→ **只能 CPU**。
 
 **规则**：①回调用关键字参数名对齐库实现（读库源码，别猜）；②涉及重试/退避这类"平时不走到"的分支，
 必须有能真实触发它的测试，而不是只测配置字典；③加固一件事之后，要问一句"这条新路径第一次执行会在哪炸"。
+
+## 11. 用 PowerShell 改写文档差点毁掉整份文件
+
+**现象**：想给 HANDOFF.md 顶部插一段提交记录，写了
+「读入文件内容 → 用 `-replace` 拼新字符串 → `Set-Content` 写回」的 PowerShell 管道。
+`-replace` 因参数个数报错（`The -replace operator allows only two elements to follow it, not 3`），
+目标变量变成 `$null`，`Set-Content` 把文件写成 **0 字节**。而 HANDOFF.md 被 `.gitignore` 排除，
+**没有 git 副本可回滚**，只能整篇重写。
+
+**教训**：
+1. 改文档/代码一律用 write / edit 工具，不要用 PowerShell 变量管道 + `Set-Content`。
+2. 非要用脚本，先写临时文件、校验非空、再 `Move-Item -Force` 覆盖。
+3. 重要且未跟踪的文档（HANDOFF、AGENTS）应有副本或纳入版本控制。
