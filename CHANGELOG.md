@@ -6,6 +6,23 @@ All notable changes to this project are documented here. Format follows
 
 ---
 
+## [0.1.5] - 2026-11-01
+
+### Added
+- `sources.normalize_video_input()`（对齐上游 `normalize_video_input`）：完整链接原样返回；
+  分享文案里夹着链接→取第一个；省略 scheme 的站内链接（`b23.tv/xxx`、`m.bilibili.com/…`）→补 `https://`；
+  裸 `BV1M6pc65Eox` / `av12345` → 补成完整视频页链接。`is_supported_url()` 同步放宽。
+- 在「本地文件」来源里粘进链接/分享文案/裸 BV 号时，点「开始转写」会自动切到「视频链接」并写一行日志。
+- OK / EN: `normalize_video_input()` accepts pasted share text, scheme-less links and bare BV ids;
+  the local-file source auto-switches to the URL source when the text looks like a link.
+
+### Changed
+- 粘贴/`--transcribe`/`--pages` 等所有入口统一走这个归一化函数（`app.py` 4 处调用点）。
+
+### Tests
+- 新增 `TestNormalizeVideoInput`（8 例）+ `test_file_source_auto_switches_to_url`；
+  原先「省略 scheme 应被拒」的老断言按新行为改写。→ **239 用例**。
+
 ## [0.1.4] - 2026-11-01
 
 ### Added

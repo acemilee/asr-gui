@@ -416,7 +416,7 @@ class AsrGui:
                 self._log("剪贴板里没有文本，请手动粘贴链接。")
                 return
             if text:
-                url = sources.extract_url(text)
+                url = sources.normalize_video_input(text)
                 self.var_media.set(url or text)
                 if url:
                     self._log(f"已从剪贴板粘贴链接：{url}")
@@ -702,8 +702,17 @@ class AsrGui:
         if not media:
             messagebox.showerror("无法开始", "请先填写或选择输入内容。")
             return
+        if source == SOURCE_FILE and not Path(media).is_file():
+            # 用户在「本地文件」里粘了链接 / 分享文案 / 裸 BV 号：自动切到「视频链接」
+            url = sources.normalize_video_input(media)
+            if url:
+                self.var_source.set(SOURCE_URL)
+                self._on_source_change()
+                self.var_media.set(url)
+                self._log(f"看起来是视频链接，已自动切换来源：{url}")
+                source, media = SOURCE_URL, url
         if source == SOURCE_URL:
-            url = sources.extract_url(media)
+            url = sources.normalize_video_input(media)
             if not url:
                 messagebox.showerror(
                     "无法开始",
@@ -1494,7 +1503,7 @@ def _run_selftest(target: Path, interactive: bool) -> int:
 
 def _resolve_source(source: str, log) -> "Path | None":
     """把命令行来源解析成本地媒体文件：URL 先下音频，其余当本地路径。"""
-    url = sources.extract_url(source)
+    url = sources.normalize_video_input(source)
     if url:
         source = url
         log(f"下载音频：{source}")
@@ -1684,8 +1693,8 @@ def _run_headless(
         except OSError:
             pass
 
-    # 允许把「分享文案」整段粘进来
-    url = sources.extract_url(source)
+    # 允许把「分享文案」整段粘进来（也接受省略 scheme 的链接或裸 BV 号）
+    url = sources.normalize_video_input(source)
     if url:
         source = url
 

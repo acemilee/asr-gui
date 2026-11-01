@@ -147,7 +147,7 @@ class TestUrlDetection:
 
     @pytest.mark.parametrize(
         "value",
-        ["", "   ", "bilibili.com/video/BV1", "ftp://a/b", "C:\\video.mp4", "https://"],
+        ["", "   ", "ftp://a/b", "C:\\video.mp4", "https://"],
     )
     def test_not_supported(self, value):
         assert sources.is_supported_url(value) is False
@@ -280,6 +280,61 @@ class TestCookieSources:
         assert sources.load_cookie_file(tmp_path / "nope.txt") == {}
 
 
+class TestNormalizeVideoInput:
+    """把「随手粘的东西」变成可下载的视频页链接（对齐上游 normalize_video_input）。"""
+
+    SHARE = (
+        "【全军配置最豪横的集团军，第82集团军，究竟有多强？ #军事科普】"
+        "https://www.bilibili.com/video/BV1M6pc65Eox?vd_source=3e19af889fc17c936694ed0e431e1b23"
+    )
+
+    def test_share_blob_without_space(self):
+        assert sources.normalize_video_input(self.SHARE) == (
+            "https://www.bilibili.com/video/BV1M6pc65Eox?vd_source=3e19af889fc17c936694ed0e431e1b23"
+        )
+
+    def test_plain_url_round_trips(self):
+        url = "https://www.bilibili.com/video/BV1xx411c7mD?p=2"
+        assert sources.normalize_video_input(url) == url
+
+    def test_leading_and_trailing_spaces(self):
+        assert (
+            sources.normalize_video_input("  https://b23.tv/abc  ")
+            == "https://b23.tv/abc"
+        )
+
+    def test_schemeless_host_gets_https(self):
+        assert sources.normalize_video_input("b23.tv/abcd123") == "https://b23.tv/abcd123"
+        assert (
+            sources.normalize_video_input("【标题】m.bilibili.com/video/BV1xx411c7mD 看这个")
+            == "https://m.bilibili.com/video/BV1xx411c7mD"
+        )
+
+    def test_bare_bv_and_av(self):
+        assert (
+            sources.normalize_video_input("BV1M6pc65Eox")
+            == "https://www.bilibili.com/video/BV1M6pc65Eox"
+        )
+        assert (
+            sources.normalize_video_input("分享 av12345 给你")
+            == "https://www.bilibili.com/video/av12345"
+        )
+
+    def test_non_bilibili_url_keeps_host(self):
+        assert sources.normalize_video_input("https://youtu.be/xyz 先看这个") == "https://youtu.be/xyz"
+
+    def test_garbage_returns_empty(self):
+        assert sources.normalize_video_input("这里没有链接") == ""
+        assert sources.normalize_video_input("") == ""
+        assert sources.normalize_video_input(None) == ""
+
+    def test_is_supported_url_accepts_all_forms(self):
+        assert sources.is_supported_url(self.SHARE)
+        assert sources.is_supported_url("b23.tv/abcd123")
+        assert sources.is_supported_url("BV1M6pc65Eox")
+        assert not sources.is_supported_url("D:\\videos\\a.mp4")
+
+
 class TestExtractUrl:
     """B 站「复制分享」会把标题和话题一起带过来。"""
 
@@ -314,5 +369,6 @@ class TestExtractUrl:
         assert sources.is_supported_url("【标题】 https://www.bilibili.com/video/BV1M6pc65Eox")
 
     def test_is_supported_url_rejects_schemeless(self):
-        assert not sources.is_supported_url("www.bilibili.com/video/BV1M6pc65Eox")
-        assert not sources.is_supported_url("BV1M6pc65Eox")
+        # v0.1.5 起：省略 scheme 的站内链接、裸 BV 号也算（会自动补全）
+        assert sources.is_supported_url("www.bilibili.com/video/BV1M6pc65Eox")
+        assert sources.is_supported_url("BV1M6pc65Eox")

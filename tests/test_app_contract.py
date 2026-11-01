@@ -186,3 +186,38 @@ class TestNoHardcodedMachinePaths:
                     if marker in text:
                         offenders.append(f"{path.name}: {marker}")
         assert offenders == []
+
+
+def test_file_source_auto_switches_to_url(monkeypatch):
+    """在「本地文件」里粘链接，on_start 时自动切到「视频链接」并归一化。"""
+    pytest = __import__("pytest")
+    pytest.importorskip("tkinter", reason="该环境没有 tkinter，跳过 GUI 结构测试")
+    monkeypatch.setenv("ASR_GUI_CONFIG_DIR", str(__import__("tempfile").mkdtemp()))
+    gui = app.AsrGui.__new__(app.AsrGui)
+    gui.running = False
+    gui.cfg = {}
+    gui.log_lines = []
+
+    class _Var:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    gui.var_source = _Var(app.SOURCE_FILE)
+    gui.var_media = _Var("BV1M6pc65Eox")
+    gui._log = lambda message: gui.log_lines.append(message)
+    gui._on_source_change = lambda: None
+    gui._save_cfg_from_ui = lambda: None
+
+    app.messagebox.showerror = lambda *a, **k: None  # type: ignore[assignment]
+    try:
+        gui.on_start()
+    except Exception:
+        pass  # 后续流程需要真的 Tk 控件，这里只断言来源被切换
+    assert gui.var_source.get() == app.SOURCE_URL
+    assert gui.var_media.get() == "https://www.bilibili.com/video/BV1M6pc65Eox"

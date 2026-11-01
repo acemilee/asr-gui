@@ -1,8 +1,8 @@
 # PyInstaller 版本资源：让 exe 的文件属性里能看到版本与版权（与 config.APP_VERSION 同步）。
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(0, 1, 4, 0),
-    prodvers=(0, 1, 4, 0),
+    filevers=(0, 1, 5, 0),
+    prodvers=(0, 1, 5, 0),
     mask=0x3F,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct("CompanyName", "asr-gui contributors"),
             StringStruct("FileDescription", "asr-gui - offline long-video speech-to-text GUI"),
-            StringStruct("FileVersion", "0.1.4"),
+            StringStruct("FileVersion", "0.1.5"),
             StringStruct("InternalName", "ASR-GUI"),
             StringStruct("LegalCopyright", "MIT License, Copyright (c) 2026 asr-gui contributors"),
             StringStruct("OriginalFilename", "ASR-GUI.exe"),
             StringStruct("ProductName", "asr-gui"),
-            StringStruct("ProductVersion", "0.1.4"),
+            StringStruct("ProductVersion", "0.1.5"),
           ],
         )
       ],

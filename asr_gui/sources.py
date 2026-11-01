@@ -19,6 +19,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 SUBTITLE_SUFFIXES = (".srt", ".vtt")
 SUPPORTED_URL_PREFIXES = ("http://", "https://")
@@ -163,6 +164,15 @@ def write_jsonl(path: str | Path, segments: list[SubtitleSegment]) -> None:
 
 # ----------------------------------------------------------------- 视频链接下载
 _URL_RE = re.compile(r"https?://[^\s<>\"'，。、；！？（）【】]+", re.IGNORECASE)
+# 缺省 scheme 的站内链接（分享文案里常见「b23.tv/xxx」）
+_VIDEO_HOST_RE = re.compile(
+    r"(?:https?://)?(?:www\.|m\.|v\.)?"
+    r"(?:bilibili\.com|b23\.tv|douyin\.com|iesdouyin\.com)/\S+",
+    re.IGNORECASE,
+)
+_BV_RE = re.compile(r"BV[0-9A-Za-z]{10}")
+_AV_RE = re.compile(r"av(\d+)", re.IGNORECASE)
+_TRAILING_PUNCT = ".,;:!?。，；：！？、）】」』”\"'/>"
 
 
 def extract_url(value: str) -> str:
@@ -182,9 +192,52 @@ def extract_url(value: str) -> str:
     return url
 
 
+def normalize_video_input(value: str) -> str:
+    """把「用户随手粘的东西」变成可直接下载的视频页链接；认不出时返回 ``""``。
+
+    按顺序尝试（与上游 video-to-note 的 ``normalize_video_input`` 等价）：
+
+    1. 本身就是完整 http(s) 链接 → 原样返回；
+    2. 文本里夹着 http(s) 链接 → 取第一个；
+    3. 文本里夹着**省略 scheme** 的站内链接（``b23.tv/xxx``、``m.bilibili.com/…``）
+       → 补 ``https://``；
+    4. 只有裸的 ``BV1M6pc65Eox`` / ``av12345`` → 补成完整视频页链接。
+
+    所以「复制分享」得到的整段文案可以直接粘进输入框。
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        # 尾巴上可能还挂着「先看这个」之类的说明，切掉第一个空白之后的部分
+        head = re.split(r"\s+", text, maxsplit=1)[0]
+        return head.rstrip(_TRAILING_PUNCT) or text
+
+    url = extract_url(text)
+    if url:
+        return url
+
+    match = _VIDEO_HOST_RE.search(text)
+    if match is not None:
+        link = match.group(0).rstrip(_TRAILING_PUNCT)
+        if not link.lower().startswith(("http://", "https://")):
+            link = "https://" + link
+        return link
+
+    bv = _BV_RE.search(text)
+    if bv is not None:
+        return f"https://www.bilibili.com/video/{bv.group(0)}"
+    av = _AV_RE.search(text)
+    if av is not None:
+        return f"https://www.bilibili.com/video/av{av.group(1)}"
+    return ""
+
+
 def is_supported_url(value: str) -> bool:
-    """只接受 http(s) 链接（本地路径走「本地文件」）；分享文案里的链接也算。"""
-    return extract_url(value) != ""
+    """能不能当成「视频链接」用：完整链接、分享文案、裸 BV 号都算。"""
+    return normalize_video_input(value) != ""
+
 
 
 def build_download_options(

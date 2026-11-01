@@ -21,7 +21,7 @@ CONFIG_FILENAME = "config.json"
 
 # Keep in sync with pyproject.toml / the git tag. Shown in the window title and
 # in the packaged exe name, so it must be a plain string literal here.
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 
 DEFAULT_MODEL_ID = "paraformer-zh"
 DEFAULT_DEVICE = "cpu"
