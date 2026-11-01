@@ -6,10 +6,6 @@
 界面只用标准库 tkinter，底层是 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（中文首选
 `paraformer-zh`）与 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)。
 
-项目缘起：现有工具在短视频上都没问题，一遇到 9 小时以上的长视频就卡死（打包版把音频通过 64 KiB 管道
-喂给子进程，缓冲区写满即永久阻塞）。本项目重写了解码与转写链路——单进程、按时长分块、逐块落盘、
-可取消可续跑。
-
 [![CI](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/acemilee/asr-gui/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/acemilee/asr-gui)](https://github.com/acemilee/asr-gui/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
